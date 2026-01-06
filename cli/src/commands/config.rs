@@ -13,10 +13,7 @@ pub async fn execute(key: Option<&str>, value: Option<&str>) -> Result<()> {
             println!("  port = {}", config.daemon.port);
             println!();
             println!("[models]");
-            println!(
-                "  directory = {:?}",
-                config.models.directory.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(default)".to_string())
-            );
+            println!("  storage_path = \"{}\"", config.models.storage_path.display());
             println!(
                 "  hf_token = {}",
                 config.models.hf_token.as_ref().map(|_| "***").unwrap_or("(not set)")
@@ -52,12 +49,7 @@ fn get_config_value(config: &Config, key: &str) -> Result<String> {
     match key {
         "daemon.host" => Ok(config.daemon.host.clone()),
         "daemon.port" => Ok(config.daemon.port.to_string()),
-        "models.directory" => Ok(config
-            .models
-            .directory
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default()),
+        "models.storage_path" => Ok(config.models.storage_path.display().to_string()),
         "models.hf_token" => Ok(config
             .models
             .hf_token
@@ -76,13 +68,7 @@ fn set_config_value(config: &mut Config, key: &str, value: &str) -> Result<()> {
     match key {
         "daemon.host" => config.daemon.host = value.to_string(),
         "daemon.port" => config.daemon.port = value.parse()?,
-        "models.directory" => {
-            config.models.directory = if value.is_empty() {
-                None
-            } else {
-                Some(value.into())
-            }
-        }
+        "models.storage_path" => config.models.storage_path = value.into(),
         "models.hf_token" => {
             config.models.hf_token = if value.is_empty() {
                 None

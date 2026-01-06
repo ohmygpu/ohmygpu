@@ -31,13 +31,19 @@ pub struct DaemonConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelsConfig {
-    /// Directory to store models
-    #[serde(default)]
-    pub directory: Option<PathBuf>,
+    /// Directory to store models (default: ~/.config/ohmygpu/models/)
+    #[serde(default = "default_storage_path")]
+    pub storage_path: PathBuf,
 
     /// HuggingFace token for private models
     #[serde(default)]
     pub hf_token: Option<String>,
+}
+
+fn default_storage_path() -> PathBuf {
+    Config::base_dir()
+        .map(|p| p.join("models"))
+        .unwrap_or_else(|_| PathBuf::from("~/.config/ohmygpu/models"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +111,7 @@ impl Default for DaemonConfig {
 impl Default for ModelsConfig {
     fn default() -> Self {
         Self {
-            directory: None,
+            storage_path: default_storage_path(),
             hf_token: None,
         }
     }
@@ -123,6 +129,15 @@ impl Default for InferenceConfig {
 }
 
 impl Config {
+    /// Get the base directory: ~/.config/ohmygpu/
+    pub fn base_dir() -> Result<PathBuf> {
+        let home = std::env::var("HOME")
+            .map(PathBuf::from)
+            .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))
+            .map_err(|_| anyhow::anyhow!("Could not determine home directory"))?;
+        Ok(home.join(".config").join("ohmygpu"))
+    }
+
     /// Load config from default location
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path()?;
@@ -149,21 +164,28 @@ impl Config {
         Ok(())
     }
 
-    /// Get the config file path
+    /// Get the config file path: ~/.config/ohmygpu/config.toml
     pub fn config_path() -> Result<PathBuf> {
-        let dirs = directories::ProjectDirs::from("com", "ohmygpu", "ohmygpu")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
-        Ok(dirs.config_dir().join("config.toml"))
+        Ok(Self::base_dir()?.join("config.toml"))
     }
 
-    /// Get the models directory (from config or default)
-    pub fn models_dir(&self) -> Result<PathBuf> {
-        if let Some(dir) = &self.models.directory {
-            Ok(dir.clone())
-        } else {
-            let dirs = directories::ProjectDirs::from("com", "ohmygpu", "ohmygpu")
-                .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-            Ok(dirs.data_dir().join("models"))
-        }
+    /// Get the registry file path: ~/.config/ohmygpu/registry.json
+    pub fn registry_path() -> Result<PathBuf> {
+        Ok(Self::base_dir()?.join("registry.json"))
+    }
+
+    /// Get the models directory from config
+    pub fn models_dir(&self) -> PathBuf {
+        self.models.storage_path.clone()
+    }
+
+    /// Get the logs directory: ~/.config/ohmygpu/logs/
+    pub fn logs_dir() -> Result<PathBuf> {
+        Ok(Self::base_dir()?.join("logs"))
+    }
+
+    /// Get the cache directory: ~/.config/ohmygpu/cache/
+    pub fn cache_dir() -> Result<PathBuf> {
+        Ok(Self::base_dir()?.join("cache"))
     }
 }

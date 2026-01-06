@@ -4,36 +4,37 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::config::Config;
 use crate::models::ModelInfo;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ModelRegistry {
     models: HashMap<String, ModelInfo>,
     #[serde(skip)]
-    config_path: PathBuf,
+    registry_path: PathBuf,
 }
 
 impl ModelRegistry {
     pub fn load() -> Result<Self> {
-        let config_dir = Self::config_dir()?;
-        fs::create_dir_all(&config_dir)?;
+        let base_dir = Config::base_dir()?;
+        fs::create_dir_all(&base_dir)?;
 
-        let config_path = config_dir.join("registry.json");
+        let registry_path = Config::registry_path()?;
 
-        let mut registry = if config_path.exists() {
-            let content = fs::read_to_string(&config_path)?;
+        let mut registry = if registry_path.exists() {
+            let content = fs::read_to_string(&registry_path)?;
             serde_json::from_str(&content)?
         } else {
             ModelRegistry::default()
         };
 
-        registry.config_path = config_path;
+        registry.registry_path = registry_path;
         Ok(registry)
     }
 
     pub fn save(&self) -> Result<()> {
         let content = serde_json::to_string_pretty(&self)?;
-        fs::write(&self.config_path, content)?;
+        fs::write(&self.registry_path, content)?;
         Ok(())
     }
 
@@ -57,21 +58,10 @@ impl ModelRegistry {
         self.models.values().collect()
     }
 
+    /// Get the models directory: ~/.config/ohmygpu/models/
     pub fn models_dir() -> Result<PathBuf> {
-        let dir = Self::data_dir()?.join("models");
+        let dir = Config::base_dir()?.join("models");
         fs::create_dir_all(&dir)?;
         Ok(dir)
-    }
-
-    pub fn config_dir() -> Result<PathBuf> {
-        let dirs = directories::ProjectDirs::from("com", "ohmygpu", "ohmygpu")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
-        Ok(dirs.config_dir().to_path_buf())
-    }
-
-    pub fn data_dir() -> Result<PathBuf> {
-        let dirs = directories::ProjectDirs::from("com", "ohmygpu", "ohmygpu")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-        Ok(dirs.data_dir().to_path_buf())
     }
 }

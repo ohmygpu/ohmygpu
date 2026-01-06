@@ -52,7 +52,6 @@ crossterm = "0.28"
 
 # Progress and utilities
 indicatif = "0.17"
-directories = "5"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Logging
