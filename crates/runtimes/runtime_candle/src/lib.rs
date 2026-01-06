@@ -3,16 +3,23 @@
 //! This crate provides LLM inference using HuggingFace's candle library.
 //! Supports Metal (macOS) and CUDA (Linux/Windows) acceleration.
 
+mod model;
+mod sampling;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use ohmygpu_runtime_api::{
     ChatRequest, ChatResponse, ChatToken, Runtime, RuntimeCaps, RuntimeConfig, RuntimeStatus,
 };
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use model::LoadedModel;
 
 pub struct CandleRuntime {
     status: RuntimeStatus,
     config: Option<RuntimeConfig>,
-    // TODO: Add candle model fields
+    model: Arc<RwLock<Option<LoadedModel>>>,
 }
 
 impl CandleRuntime {
@@ -20,6 +27,25 @@ impl CandleRuntime {
         Self {
             status: RuntimeStatus::Unloaded,
             config: None,
+            model: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    fn get_device() -> Result<candle_core::Device> {
+        #[cfg(feature = "metal")]
+        {
+            tracing::info!("Using Metal device");
+            Ok(candle_core::Device::new_metal(0)?)
+        }
+        #[cfg(feature = "cuda")]
+        {
+            tracing::info!("Using CUDA device");
+            Ok(candle_core::Device::new_cuda(0)?)
+        }
+        #[cfg(not(any(feature = "metal", feature = "cuda")))]
+        {
+            tracing::info!("Using CPU device (no GPU features enabled)");
+            Ok(candle_core::Device::Cpu)
         }
     }
 }
@@ -36,9 +62,9 @@ impl Runtime for CandleRuntime {
         RuntimeCaps {
             chat: true,
             completions: true,
-            embeddings: false, // TODO: implement
+            embeddings: false,
             images: false,
-            audio: false, // TODO: whisper support
+            audio: false,
             streaming: true,
         }
     }
@@ -51,16 +77,27 @@ impl Runtime for CandleRuntime {
         self.status = RuntimeStatus::Loading;
         tracing::info!("Loading model from {:?}", config.model_path);
 
-        // TODO: Actually load the model with candle
-        // For now, just store config and mark as ready
+        let device = Self::get_device()?;
+        tracing::info!("Device: {:?}", device);
+
+        // Load the model
+        let model_path = config.model_path.clone();
+        let loaded = tokio::task::spawn_blocking(move || {
+            LoadedModel::load(&model_path, &device)
+        })
+        .await??;
+
+        *self.model.write().await = Some(loaded);
         self.config = Some(config);
         self.status = RuntimeStatus::Ready;
 
+        tracing::info!("Model loaded successfully");
         Ok(())
     }
 
     async fn unload(&mut self) -> Result<()> {
         tracing::info!("Unloading model");
+        *self.model.write().await = None;
         self.config = None;
         self.status = RuntimeStatus::Unloaded;
         Ok(())
@@ -71,15 +108,26 @@ impl Runtime for CandleRuntime {
             anyhow::bail!("Model not loaded");
         }
 
-        // TODO: Actually run inference
-        // For now, return a placeholder
-        tracing::info!("Chat request: {:?}", request.messages.last());
+        let model_guard = self.model.read().await;
+        let model = model_guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Model not loaded"))?;
+
+        // Build prompt from messages
+        let prompt = build_chat_prompt(&request.messages);
+        tracing::debug!("Prompt: {}", prompt);
+
+        // Generate response
+        let response = model.generate(
+            &prompt,
+            request.max_tokens as usize,
+            request.temperature,
+        )?;
 
         Ok(ChatResponse {
-            content: "Hello! I'm a placeholder response. Candle inference not yet implemented."
-                .to_string(),
-            tokens_used: 10,
-            finish_reason: "stop".to_string(),
+            content: response.text,
+            tokens_used: response.tokens_generated as u32,
+            finish_reason: response.finish_reason,
         })
     }
 
@@ -92,29 +140,44 @@ impl Runtime for CandleRuntime {
         }
 
         let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let model = self.model.clone();
+        let prompt = build_chat_prompt(&request.messages);
+        let max_tokens = request.max_tokens as usize;
+        let temperature = request.temperature;
 
-        // TODO: Actually stream tokens
-        // For now, send placeholder tokens
         tokio::spawn(async move {
-            let response = "Hello! I'm a placeholder streaming response.";
-            for word in response.split_whitespace() {
-                let _ = tx
-                    .send(ChatToken {
-                        content: format!("{} ", word),
-                        finish_reason: None,
-                    })
-                    .await;
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            let model_guard = model.read().await;
+            if let Some(loaded_model) = model_guard.as_ref() {
+                if let Err(e) = loaded_model.generate_stream(&prompt, max_tokens, temperature, tx).await {
+                    tracing::error!("Generation error: {}", e);
+                }
             }
-            let _ = tx
-                .send(ChatToken {
-                    content: String::new(),
-                    finish_reason: Some("stop".to_string()),
-                })
-                .await;
         });
 
-        let _ = request; // suppress warning for now
         Ok(rx)
     }
+}
+
+fn build_chat_prompt(messages: &[ohmygpu_runtime_api::ChatMessage]) -> String {
+    // Simple chat template (Llama-style)
+    let mut prompt = String::new();
+
+    for msg in messages {
+        match msg.role.as_str() {
+            "system" => {
+                prompt.push_str(&format!("<<SYS>>\n{}\n<</SYS>>\n\n", msg.content));
+            }
+            "user" => {
+                prompt.push_str(&format!("[INST] {} [/INST]", msg.content));
+            }
+            "assistant" => {
+                prompt.push_str(&format!(" {} ", msg.content));
+            }
+            _ => {
+                prompt.push_str(&msg.content);
+            }
+        }
+    }
+
+    prompt
 }

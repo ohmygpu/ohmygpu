@@ -1,3 +1,4 @@
+pub mod config;
 pub mod models;
 pub mod pull;
 pub mod remove;

@@ -1,6 +1,14 @@
-use axum::{extract::State, Json};
+use axum::{
+    extract::State,
+    response::{
+        sse::{Event, Sse},
+        IntoResponse, Response,
+    },
+    Json,
+};
+use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
 use crate::state::AppState;
 use ohmygpu_runtime_api::{ChatMessage, ChatRequest, Runtime};
@@ -86,10 +94,49 @@ pub struct Delta {
     pub content: Option<String>,
 }
 
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: ErrorDetail,
+}
+
+#[derive(Serialize)]
+struct ErrorDetail {
+    message: String,
+    r#type: &'static str,
+}
+
 pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ChatCompletionRequest>,
-) -> Result<Json<ChatCompletionResponse>, axum::http::StatusCode> {
+) -> Response {
+    // Auto-load model if not loaded
+    if let Err(e) = state.load_model(&request.model).await {
+        tracing::error!("Failed to load model {}: {}", request.model, e);
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    message: format!("Failed to load model '{}': {}", request.model, e),
+                    r#type: "invalid_request_error",
+                },
+            }),
+        )
+            .into_response();
+    }
+
+    if request.stream {
+        chat_completions_stream(state, request).await.into_response()
+    } else {
+        chat_completions_non_stream(state, request)
+            .await
+            .into_response()
+    }
+}
+
+async fn chat_completions_non_stream(
+    state: Arc<AppState>,
+    request: ChatCompletionRequest,
+) -> Result<Json<ChatCompletionResponse>, (axum::http::StatusCode, Json<ErrorResponse>)> {
     let runtime = state.runtime.read().await;
 
     let chat_request = ChatRequest {
@@ -126,7 +173,7 @@ pub async fn chat_completions(
                     finish_reason: response.finish_reason,
                 }],
                 usage: Usage {
-                    prompt_tokens: 0, // TODO: count tokens
+                    prompt_tokens: 0,
                     completion_tokens: response.tokens_used,
                     total_tokens: response.tokens_used,
                 },
@@ -134,9 +181,95 @@ pub async fn chat_completions(
         }
         Err(e) => {
             tracing::error!("Chat error: {}", e);
-            Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+            Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        message: format!("Generation error: {}", e),
+                        r#type: "server_error",
+                    },
+                }),
+            ))
         }
     }
+}
+
+async fn chat_completions_stream(
+    state: Arc<AppState>,
+    request: ChatCompletionRequest,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let id = format!("chatcmpl-{}", uuid_simple());
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let model = request.model.clone();
+
+    let runtime = state.runtime.clone();
+
+    let stream = async_stream::stream! {
+        // Send initial chunk with role
+        let initial_chunk = ChatCompletionChunk {
+            id: id.clone(),
+            object: "chat.completion.chunk",
+            created,
+            model: model.clone(),
+            choices: vec![ChatChoiceDelta {
+                index: 0,
+                delta: Delta {
+                    role: Some("assistant"),
+                    content: None,
+                },
+                finish_reason: None,
+            }],
+        };
+        yield Ok(Event::default().data(serde_json::to_string(&initial_chunk).unwrap()));
+
+        let chat_request = ChatRequest {
+            messages: request
+                .messages
+                .into_iter()
+                .map(|m| ChatMessage {
+                    role: m.role,
+                    content: m.content,
+                })
+                .collect(),
+            max_tokens: request.max_tokens,
+            temperature: request.temperature,
+            stream: true,
+        };
+
+        let runtime_guard = runtime.read().await;
+        match runtime_guard.chat_stream(chat_request).await {
+            Ok(mut rx) => {
+                while let Some(token) = rx.recv().await {
+                    let chunk = ChatCompletionChunk {
+                        id: id.clone(),
+                        object: "chat.completion.chunk",
+                        created,
+                        model: model.clone(),
+                        choices: vec![ChatChoiceDelta {
+                            index: 0,
+                            delta: Delta {
+                                role: None,
+                                content: if token.content.is_empty() { None } else { Some(token.content) },
+                            },
+                            finish_reason: token.finish_reason,
+                        }],
+                    };
+                    yield Ok(Event::default().data(serde_json::to_string(&chunk).unwrap()));
+                }
+            }
+            Err(e) => {
+                tracing::error!("Stream error: {}", e);
+            }
+        }
+
+        // Send [DONE] marker
+        yield Ok(Event::default().data("[DONE]"));
+    };
+
+    Sse::new(stream)
 }
 
 fn uuid_simple() -> String {

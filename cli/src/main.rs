@@ -64,6 +64,15 @@ enum Commands {
         /// Search query
         query: String,
     },
+
+    /// View or set configuration
+    Config {
+        /// Config key (e.g., "daemon.port", "inference.temperature")
+        key: Option<String>,
+
+        /// Value to set (if omitted, shows current value)
+        value: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -105,6 +114,9 @@ async fn main() -> Result<()> {
         }
         Commands::Search { query } => {
             commands::search::execute(&query).await?;
+        }
+        Commands::Config { key, value } => {
+            commands::config::execute(key.as_deref(), value.as_deref()).await?;
         }
     }
 

@@ -41,6 +41,7 @@ thiserror = "2"
 # Async utilities
 async-trait = "0.1"
 futures-util = "0.3"
+async-stream = "0.3"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -57,6 +58,16 @@ chrono = { version = "0.4", features = ["serde"] }
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Config
+toml = "0.8"
+
+# Candle inference (with Metal/CUDA support)
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+tokenizers = "0.20"
+hf-hub = "0.3"
 
 # Self-update
 self_update = { version = "0.39", features = ["archive-tar", "compression-flate2"] }

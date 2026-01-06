@@ -19,5 +19,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
+async-stream.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
