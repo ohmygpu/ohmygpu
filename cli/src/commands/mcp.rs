@@ -1,21 +1,19 @@
-//! MCP Server for ohmygpu
+//! MCP Server command - exposes ohmygpu to Claude Desktop and other MCP clients.
 //!
-//! Exposes local AI models to Claude Desktop and other MCP clients.
-//!
-//! ## Installation
-//!
-//! Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+//! Usage in Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 //!
 //! ```json
 //! {
 //!   "mcpServers": {
 //!     "ohmygpu": {
-//!       "command": "ohmygpu-mcp"
+//!       "command": "ohmygpu",
+//!       "args": ["mcp"]
 //!     }
 //!   }
 //! }
 //! ```
 
+use anyhow::Result;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
@@ -169,27 +167,12 @@ impl ServerHandler for OhmyGpuMcp {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Initialize logging (to stderr, not stdout - MCP uses stdout for protocol)
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
-
-    tracing::info!("Starting ohmygpu MCP server");
-
+/// Run the MCP server (stdio mode for Claude Desktop)
+pub async fn execute() -> Result<()> {
+    // Note: No logging to stdout - MCP uses stdout for protocol
+    // Logging goes to stderr
     let server = OhmyGpuMcp::new();
     let service = server.serve(rmcp::transport::stdio()).await?;
-
-    tracing::info!("MCP server running");
-
-    // Wait for shutdown
     service.waiting().await?;
-    tracing::info!("MCP server stopped");
-
     Ok(())
 }

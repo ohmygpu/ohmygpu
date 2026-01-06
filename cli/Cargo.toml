@@ -39,3 +39,5 @@ chrono.workspace = true
 image = "0.25"
 dirs = "6"
 dialoguer = "0.11"
+rmcp = { version = "0.12", features = ["server", "macros", "transport-io"] }
+schemars = "1.2.0"

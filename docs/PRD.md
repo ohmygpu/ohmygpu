@@ -25,8 +25,8 @@ curl -sSL https://get.ohmygpu.com | sh
 | `ohmygpu_core` | HuggingFace downloads, model repository, RunSpec |
 | `runtime_api` | Runtime trait definition |
 | `runtime_candle` | Rust-native LLM inference |
-| `ohmygpu_daemon` | HTTP API server, model lifecycle |
-| `ohmygpu_cli` | Basic TUI, pull/run/stop commands |
+| `ohmygpu_daemon` | HTTP API server (OpenAI + Ollama compatible), model lifecycle |
+| `ohmygpu_cli` | CLI with TUI, pull/run/stop/mcp commands |
 
 ### Out of Scope (v2+)
 
@@ -115,6 +115,27 @@ omg status
 - Shows running models
 - Shows GPU memory usage
 - Shows daemon health
+
+### US-6: Use with Claude Desktop (MCP)
+```
+As a Claude Desktop user, I want to chat with local models
+So that I can use them directly from Claude
+
+# Add to Claude Desktop config
+{
+  "mcpServers": {
+    "ohmygpu": {
+      "command": "omg",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Acceptance criteria:**
+- MCP server starts via `omg mcp`
+- Exposes tools: `chat`, `list_models`, `status`
+- Works with Claude Desktop and other MCP clients
 
 ---
 
@@ -210,6 +231,7 @@ Ollama-compatible API (drop-in replacement):
 | `omg rm <model>` | Remove model |
 | `omg status` | Show daemon and GPU status |
 | `omg serve` | Start daemon (usually auto-started) |
+| `omg mcp` | Start MCP server for Claude Desktop |
 | `omg update` | Self-update binary and symlink |
 
 ### TR-6: Install Script
@@ -310,6 +332,7 @@ Ollama-compatible API (drop-in replacement):
 | `serde`, `serde_json` | Serialization |
 | `tracing` | Logging |
 | `self_update` | Self-update from GitHub releases |
+| `rmcp` | MCP server for Claude Desktop integration |
 
 ---
 
@@ -319,3 +342,5 @@ Ollama-compatible API (drop-in replacement):
 - [candle repo](https://github.com/huggingface/candle)
 - [OpenAI API spec](https://platform.openai.com/docs/api-reference/chat)
 - [ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md)
+- [MCP specification](https://modelcontextprotocol.io/)
+- [rmcp Rust SDK](https://github.com/modelcontextprotocol/rust-sdk)

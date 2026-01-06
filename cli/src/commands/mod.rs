@@ -1,5 +1,6 @@
 pub mod config;
 pub mod generate;
+pub mod mcp;
 pub mod models;
 pub mod pull;
 pub mod remove;

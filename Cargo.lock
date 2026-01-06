@@ -2720,6 +2720,8 @@ dependencies = [
  "ohmygpu_runtime_diffusion",
  "ratatui",
  "reqwest 0.12.28",
+ "rmcp",
+ "schemars",
  "self_update",
  "serde",
  "serde_json",
@@ -2766,21 +2768,6 @@ dependencies = [
  "tokio",
  "tower 0.4.13",
  "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "ohmygpu_mcp"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "reqwest 0.12.28",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
  "tracing",
  "tracing-subscriber",
 ]

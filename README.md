@@ -57,6 +57,7 @@ Devices with less than 8GB may run with warnings and can be unstable (OOM / slow
 | `omg serve` | Start daemon server |
 | `omg search <query>` | Search HuggingFace models |
 | `omg generate <prompt>` | Generate images (diffusion models) |
+| `omg mcp` | Start MCP server (for Claude Desktop) |
 | `omg update` | Self-update to latest version |
 
 ## API Endpoints
@@ -100,19 +101,14 @@ Existing ollama scripts work without modification - just change the port if need
 
 ohmygpu includes an MCP server for direct integration with Claude Desktop and other MCP clients.
 
-**Install:**
-```bash
-# Build the MCP server
-cargo build -p ohmygpu_mcp --release
-
-# Add to Claude Desktop config (~/.config/claude/claude_desktop_config.json)
-```
+**Setup:** Add to Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "ohmygpu": {
-      "command": "/path/to/ohmygpu-mcp"
+      "command": "ohmygpu",
+      "args": ["mcp"]
     }
   }
 }
@@ -172,8 +168,7 @@ ohmygpu/
 │       ├── runtime_candle/   # Rust-native inference (LLMs)
 │       └── runtime_diffusion/# Image generation (Flux, SD)
 ├── daemon/                   # HTTP server, OpenAI/Ollama API
-├── cli/                      # CLI binary
-└── mcp/                      # MCP server for Claude Desktop
+└── cli/                      # CLI binary (includes MCP server)
 ```
 
 **Data flow:**

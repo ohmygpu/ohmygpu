@@ -7,7 +7,6 @@ members = [
     "crates/runtimes/runtime_diffusion",
     "daemon",
     "cli",
-    "mcp",
 ]
 
 [workspace.package]

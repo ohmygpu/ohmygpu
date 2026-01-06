@@ -75,6 +75,9 @@ enum Commands {
         value: Option<String>,
     },
 
+    /// Start MCP server for Claude Desktop integration
+    Mcp,
+
     /// Generate an image from a text prompt
     Generate {
         /// Model to use (e.g., "Tongyi-MAI/Z-Image-Turbo" or local path)
@@ -130,6 +133,11 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // MCP command skips GPU check (it just connects to daemon via HTTP)
+    if matches!(cli.command, Commands::Mcp) {
+        return commands::mcp::execute().await;
+    }
+
     // Check GPU requirements at startup
     match gpu::check_gpu_requirements() {
         gpu::GpuCheckResult::NoGpu => {
@@ -176,6 +184,10 @@ async fn main() -> Result<()> {
         }
         Commands::Config { key, value } => {
             commands::config::execute(key.as_deref(), value.as_deref()).await?;
+        }
+        Commands::Mcp => {
+            // Handled above with early return
+            unreachable!()
         }
         Commands::Generate {
             model,

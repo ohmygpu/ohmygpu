@@ -130,25 +130,21 @@ With daemon, CLI/Tauri become mere "clients" - truly achieving "one capability s
 
 - TUI (ratatui)
 - Calls daemon exclusively
+- Includes MCP server (`omg mcp` command)
 
----
-
-### ohmygpu_mcp (Bin)
+**MCP Server** (via `omg mcp`):
 
 MCP (Model Context Protocol) server for Claude Desktop and other MCP clients.
 
 - Exposes local models as MCP tools
-- Connects to daemon via HTTP (same as CLI)
+- Connects to daemon via HTTP
 - Runs as stdio server for MCP protocol
 
-**Available tools:**
-- `chat` - Chat with a local AI model
-- `list_models` - List installed models
-- `status` - Check daemon health
+Available tools: `chat`, `list_models`, `status`
 
 ---
 
-### ohmygpu_desktop (Tauri Bin)
+### ohmygpu_desktop (Tauri Bin, Future)
 
 - GUI (React/Vue)
 - Communicates with daemon via HTTP/WebSocket (cleaner and more extensible than direct Tauri command → Rust function calls)
@@ -187,10 +183,9 @@ ohmygpu/
 │       ├── runtime_llamacpp/     # (future, wider model support)
 │       ├── runtime_comfyui/      # (future, image generation)
 │       └── runtime_vllm/         # (future, production servers)
-├── daemon/                       # ohmygpu_daemon (bin)
-├── cli/                          # ohmygpu_cli (bin)
-├── mcp/                          # ohmygpu_mcp - MCP server for Claude Desktop
-├── desktop/                      # ohmygpu_desktop (tauri bin)
+├── daemon/                       # ohmygpu_daemon (lib)
+├── cli/                          # ohmygpu_cli (bin) - includes MCP server
+├── desktop/                      # ohmygpu_desktop (tauri bin, future)
 ├── assets/
 └── docs/
 ```
