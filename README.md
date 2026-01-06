@@ -23,12 +23,15 @@ make build-cuda
 
 ```bash
 # Download a model from HuggingFace
-omg pull microsoft/phi-2
+omg model pull microsoft/phi-2
 
-# Run the model
-omg run microsoft/phi-2
+# Start the daemon
+omg serve
 
-# Chat via OpenAI-compatible API
+# Interactive chat
+omg chat microsoft/phi-2
+
+# Or chat via OpenAI-compatible API
 curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "microsoft/phi-2", "messages": [{"role": "user", "content": "Hello!"}]}'
@@ -46,18 +49,42 @@ Devices with less than 8GB may run with warnings and can be unstable (OOM / slow
 
 ## CLI Commands
 
+### Model Management
+
+Models are static assets. Use `omg model` to manage them.
+
 | Command | Description |
 |---------|-------------|
-| `omg pull <model>` | Download model from HuggingFace |
-| `omg run <model>` | Load and serve model |
-| `omg stop [model]` | Stop running model(s) |
-| `omg models` | List installed models |
-| `omg rm <model>` | Remove model |
-| `omg status` | Show daemon and GPU status |
-| `omg serve` | Start daemon server |
+| `omg model list` | List installed models |
+| `omg model pull <model>` | Download model from HuggingFace |
+| `omg model rm <model>` | Remove an installed model |
+| `omg model info <model>` | Show model details (size, path, type) |
+| `omg model gc` | Garbage collect unused cache files |
+
+### Daemon Server
+
+| Command | Description |
+|---------|-------------|
+| `omg serve` | Start daemon in foreground |
+| `omg serve -d` | Start daemon in background (daemon mode) |
+| `omg serve status` | Check if daemon is running |
+| `omg serve stop` | Stop the daemon |
+
+### Content Generation
+
+| Command | Description |
+|---------|-------------|
+| `omg gen image "<prompt>"` | Generate image from text |
+| `omg gen video "<prompt>"` | Generate video (coming soon) |
+
+### Other Commands
+
+| Command | Description |
+|---------|-------------|
+| `omg chat <model>` | Interactive terminal chat |
 | `omg search <query>` | Search HuggingFace models |
-| `omg generate <prompt>` | Generate images (diffusion models) |
-| `omg mcp` | Start MCP server (for Claude Desktop) |
+| `omg config [key] [value]` | View or set configuration |
+| `omg mcp` | Start MCP server (Claude Desktop) |
 | `omg update` | Self-update to latest version |
 
 ## API Endpoints

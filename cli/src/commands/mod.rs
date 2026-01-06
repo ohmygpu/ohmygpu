@@ -1,12 +1,12 @@
+pub mod chat;
 pub mod config;
 pub mod generate;
 pub mod mcp;
+pub mod model_gc;
+pub mod model_info;
 pub mod models;
 pub mod pull;
 pub mod remove;
-pub mod run;
 pub mod search;
 pub mod serve;
-pub mod status;
-pub mod stop;
 pub mod update;

@@ -269,8 +269,12 @@ All UIs connect to it. This is your moat.
 **Responsibilities:**
 
 - "k9s/nvidia-smi style": view downloads, tasks, runtime status
-- Operations: `pull` / `install` / `run` / `stop` / `serve` / `cache-gc` / `doctor`
-- Connects to daemon (local socket/localhost)
+- Model management: `model list` / `model pull` / `model rm` / `model info` / `model gc`
+- Daemon control: `serve` / `serve status` / `serve stop`
+- Content generation: `gen image` / `gen video`
+- Interactive: `chat <model>`
+- Utilities: `search` / `config` / `mcp` / `update`
+- Connects to daemon via HTTP (localhost:11434)
 
 ---
 

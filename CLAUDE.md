@@ -13,9 +13,10 @@ cargo run --bin ohmygpu -- <command>
 
 # Run specific commands
 cargo run --bin ohmygpu -- search phi-2
-cargo run --bin ohmygpu -- pull microsoft/phi-2
-cargo run --bin ohmygpu -- models
+cargo run --bin ohmygpu -- model pull microsoft/phi-2
+cargo run --bin ohmygpu -- model list
 cargo run --bin ohmygpu -- serve --port 11434
+cargo run --bin ohmygpu -- chat microsoft/phi-2
 
 # Run tests (when implemented)
 cargo test
@@ -66,10 +67,11 @@ User → CLI → Daemon → Runtime (candle) → GPU
 ### CLI Commands
 
 Binary is `ohmygpu`, intended to be symlinked as `omg` for convenience:
-- `pull <model>` - Download from HuggingFace
-- `run <model>` - Load model for inference
-- `serve` - Start daemon on port 11434
-- `models` / `rm` / `status` / `search` / `update`
+- `model list/pull/rm/info/gc` - Model management (static assets)
+- `serve` / `serve status` / `serve stop` - Daemon control
+- `gen image/video` - Content generation
+- `chat <model>` - Interactive terminal chat
+- `search` / `config` / `mcp` / `update` - Utilities
 
 ### API Endpoints (Daemon)
 

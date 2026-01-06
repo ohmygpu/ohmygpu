@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "ohmygpu")]
-#[command(author, version, about = "Download and run AI models locally", long_about = None)]
+#[command(author, version, about = "Unified local AI infrastructure", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -14,57 +14,40 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Pull a model from HuggingFace
-    Pull {
-        /// Model identifier (e.g., "microsoft/phi-2")
-        model: String,
-
-        /// Specific file to download
-        #[arg(short, long)]
-        file: Option<String>,
+    /// Model management (list, pull, remove, info, gc)
+    Model {
+        #[command(subcommand)]
+        action: ModelCommands,
     },
 
-    /// Run/load a model for inference
-    Run {
-        /// Model name to run
-        model: String,
-    },
-
-    /// Stop a running model
-    Stop {
-        /// Model name to stop (optional, stops all if not specified)
-        model: Option<String>,
-    },
-
-    /// List downloaded models
-    #[command(alias = "ls")]
-    Models,
-
-    /// Remove a downloaded model
-    #[command(alias = "rm")]
-    Remove {
-        /// Model name to remove
-        model: String,
-    },
-
-    /// Show daemon and GPU status
-    Status,
-
-    /// Start the daemon server
+    /// Daemon server management
     Serve {
+        #[command(subcommand)]
+        action: Option<ServeCommands>,
+
+        /// Run in background (daemon mode)
+        #[arg(short, long)]
+        daemon: bool,
+
         /// Port to listen on
         #[arg(short, long, default_value = "11434")]
         port: u16,
     },
 
-    /// Self-update to the latest version
-    Update,
-
-    /// Search for models on HuggingFace
-    Search {
-        /// Search query
-        query: String,
+    /// Generate content (image, video, audio)
+    Gen {
+        #[command(subcommand)]
+        action: GenCommands,
     },
+
+    /// Interactive chat with a model
+    Chat {
+        /// Model to chat with
+        model: String,
+    },
+
+    /// Start MCP server for Claude Desktop integration
+    Mcp,
 
     /// View or set configuration
     Config {
@@ -75,17 +58,68 @@ enum Commands {
         value: Option<String>,
     },
 
-    /// Start MCP server for Claude Desktop integration
-    Mcp,
+    /// Search for models on HuggingFace
+    Search {
+        /// Search query
+        query: String,
+    },
 
-    /// Generate an image from a text prompt
-    Generate {
-        /// Model to use (e.g., "Tongyi-MAI/Z-Image-Turbo" or local path)
-        #[arg(short, long, default_value = "Tongyi-MAI/Z-Image-Turbo")]
+    /// Self-update to the latest version
+    Update,
+}
+
+#[derive(Subcommand)]
+enum ModelCommands {
+    /// List installed models
+    #[command(alias = "ls")]
+    List,
+
+    /// Pull/download a model from HuggingFace
+    Pull {
+        /// Model identifier (e.g., "microsoft/phi-2")
         model: String,
 
+        /// Specific file to download
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+
+    /// Remove an installed model
+    #[command(alias = "rm")]
+    Remove {
+        /// Model name to remove
+        model: String,
+    },
+
+    /// Show model information
+    Info {
+        /// Model name
+        model: String,
+    },
+
+    /// Garbage collect unused cache files
+    Gc,
+}
+
+#[derive(Subcommand)]
+enum ServeCommands {
+    /// Check daemon status
+    Status,
+
+    /// Stop the daemon
+    Stop,
+}
+
+#[derive(Subcommand)]
+enum GenCommands {
+    /// Generate an image from a text prompt
+    Image {
         /// Text prompt for image generation
         prompt: String,
+
+        /// Model to use
+        #[arg(short, long, default_value = "Tongyi-MAI/Z-Image-Turbo")]
+        model: String,
 
         /// Output file path
         #[arg(short, long, default_value = "output.png")]
@@ -118,6 +152,12 @@ enum Commands {
         /// Run on CPU instead of GPU
         #[arg(long)]
         cpu: bool,
+    },
+
+    /// Generate a video (coming soon)
+    Video {
+        /// Text prompt
+        prompt: String,
     },
 }
 
@@ -155,65 +195,97 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Commands::Pull { model, file } => {
-            commands::pull::execute(&model, file.as_deref()).await?;
-        }
-        Commands::Run { model } => {
-            commands::run::execute(&model).await?;
-        }
-        Commands::Stop { model } => {
-            commands::stop::execute(model.as_deref()).await?;
-        }
-        Commands::Models => {
-            commands::models::execute().await?;
-        }
-        Commands::Remove { model } => {
-            commands::remove::execute(&model).await?;
-        }
-        Commands::Status => {
-            commands::status::execute().await?;
-        }
-        Commands::Serve { port } => {
-            commands::serve::execute(port).await?;
-        }
-        Commands::Update => {
-            commands::update::execute().await?;
-        }
-        Commands::Search { query } => {
-            commands::search::execute(&query).await?;
-        }
-        Commands::Config { key, value } => {
-            commands::config::execute(key.as_deref(), value.as_deref()).await?;
-        }
-        Commands::Mcp => {
-            // Handled above with early return
-            unreachable!()
-        }
-        Commands::Generate {
-            model,
-            prompt,
-            output,
-            width,
-            height,
-            steps,
-            guidance_scale,
-            negative_prompt,
-            seed,
-            cpu,
-        } => {
-            commands::generate::execute(
-                &model,
-                &prompt,
-                &output,
+        // Model management
+        Commands::Model { action } => match action {
+            ModelCommands::List => {
+                commands::models::execute().await?;
+            }
+            ModelCommands::Pull { model, file } => {
+                commands::pull::execute(&model, file.as_deref()).await?;
+            }
+            ModelCommands::Remove { model } => {
+                commands::remove::execute(&model).await?;
+            }
+            ModelCommands::Info { model } => {
+                commands::model_info::execute(&model).await?;
+            }
+            ModelCommands::Gc => {
+                commands::model_gc::execute().await?;
+            }
+        },
+
+        // Serve daemon
+        Commands::Serve { action, daemon, port } => match action {
+            None => {
+                // Start server
+                if daemon {
+                    commands::serve::execute_background(port).await?;
+                } else {
+                    commands::serve::execute(port).await?;
+                }
+            }
+            Some(ServeCommands::Status) => {
+                commands::serve::status().await?;
+            }
+            Some(ServeCommands::Stop) => {
+                commands::serve::stop().await?;
+            }
+        },
+
+        // Generate content
+        Commands::Gen { action } => match action {
+            GenCommands::Image {
+                prompt,
+                model,
+                output,
                 width,
                 height,
                 steps,
                 guidance_scale,
-                negative_prompt.as_deref(),
+                negative_prompt,
                 seed,
                 cpu,
-            )
-            .await?;
+            } => {
+                commands::generate::execute(
+                    &model,
+                    &prompt,
+                    &output,
+                    width,
+                    height,
+                    steps,
+                    guidance_scale,
+                    negative_prompt.as_deref(),
+                    seed,
+                    cpu,
+                )
+                .await?;
+            }
+            GenCommands::Video { prompt: _ } => {
+                println!("Video generation coming soon!");
+            }
+        },
+
+        // Interactive chat
+        Commands::Chat { model } => {
+            commands::chat::execute(&model).await?;
+        }
+
+        // MCP (handled above with early return)
+        Commands::Mcp => unreachable!(),
+
+        // Config
+        Commands::Config { key, value } => {
+            commands::config::execute(key.as_deref(), value.as_deref()).await?;
+        }
+
+        // Search
+        Commands::Search { query } => {
+            commands::search::execute(&query).await?;
+        }
+
+        // Update
+        Commands::Update => {
+            commands::update::execute().await?;
         }
     }
 

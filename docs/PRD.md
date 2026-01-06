@@ -46,28 +46,29 @@ curl -sSL https://get.ohmygpu.com | sh
 As a user, I want to download a model from HuggingFace
 So that I can run it locally
 
-omg pull microsoft/phi-2
+omg model pull microsoft/phi-2
 ```
 
 **Acceptance criteria:**
 - Downloads from HuggingFace with progress display
 - Supports resume on interruption
 - Stores in unified model repository
-- Shows in `omg models` list
+- Shows in `omg model list`
 
-### US-2: Run a model
+### US-2: Chat with a model
 ```
-As a user, I want to start a model for inference
-So that I can chat with it
+As a user, I want to chat with a local model
+So that I can interact with it
 
-omg run microsoft/phi-2
+omg serve              # Start daemon
+omg chat microsoft/phi-2  # Interactive chat
 ```
 
 **Acceptance criteria:**
-- Loads model into GPU memory via candle
+- Daemon loads model on demand via candle
 - Exposes OpenAI-compatible endpoint
-- Shows status in CLI
-- Can be stopped with `omg stop`
+- Interactive terminal chat with streaming
+- Model is unloaded when idle
 
 ### US-3: Chat via API
 ```
@@ -94,27 +95,30 @@ curl http://localhost:11434/api/chat \
 As a user, I want to see what models I have
 So that I can manage disk space
 
-omg models
-omg rm microsoft/phi-2
+omg model list
+omg model info microsoft/phi-2
+omg model rm microsoft/phi-2
+omg model gc
 ```
 
 **Acceptance criteria:**
-- Lists installed models with size, last used
+- Lists installed models with size
+- Shows model details (source, type, path, size)
 - Can remove models to free disk space
-- Shows which models are currently running
+- Garbage collect cleans orphaned cache files
 
-### US-5: View system status
+### US-5: View daemon status
 ```
-As a user, I want to see what's running
-So that I can monitor my GPU usage
+As a user, I want to check if the daemon is running
+So that I can troubleshoot connection issues
 
-omg status
+omg serve status
 ```
 
 **Acceptance criteria:**
-- Shows running models
-- Shows GPU memory usage
-- Shows daemon health
+- Shows daemon running state
+- Shows loaded models
+- Shows daemon URL
 
 ### US-6: Use with Claude Desktop (MCP)
 ```
@@ -216,21 +220,45 @@ Ollama-compatible API (drop-in replacement):
 |-------------|---------|
 | Framework | clap for args, ratatui for TUI |
 | Binary | `ohmygpu` (single binary), `omg` (symlink, preferred) |
-| Commands | `pull`, `run`, `stop`, `models`, `rm`, `status`, `serve`, `update` |
-| Daemon connection | Connect via Unix socket / HTTP |
+| Commands | Nested subcommands: `model`, `serve`, `gen`, `chat`, `mcp` |
+| Daemon connection | Connect via HTTP to localhost:11434 |
 | Progress display | Download progress bars, streaming tokens |
 
 **CLI commands (v1):**
 
+Model management (static assets):
+
 | Command | Description |
 |---------|-------------|
-| `omg pull <model>` | Download model from HuggingFace |
-| `omg run <model>` | Load and serve model |
-| `omg stop [model]` | Stop running model(s) |
-| `omg models` | List installed models |
-| `omg rm <model>` | Remove model |
-| `omg status` | Show daemon and GPU status |
-| `omg serve` | Start daemon (usually auto-started) |
+| `omg model list` | List installed models |
+| `omg model pull <model>` | Download model from HuggingFace |
+| `omg model rm <model>` | Remove model |
+| `omg model info <model>` | Show model details |
+| `omg model gc` | Garbage collect unused cache files |
+
+Daemon server:
+
+| Command | Description |
+|---------|-------------|
+| `omg serve` | Start daemon in foreground |
+| `omg serve -d` | Start daemon in background |
+| `omg serve status` | Check daemon status |
+| `omg serve stop` | Stop the daemon |
+
+Content generation:
+
+| Command | Description |
+|---------|-------------|
+| `omg gen image <prompt>` | Generate image |
+| `omg gen video <prompt>` | Generate video (future) |
+
+Other:
+
+| Command | Description |
+|---------|-------------|
+| `omg chat <model>` | Interactive terminal chat |
+| `omg search <query>` | Search HuggingFace models |
+| `omg config` | View/set configuration |
 | `omg mcp` | Start MCP server for Claude Desktop |
 | `omg update` | Self-update binary and symlink |
 
