@@ -1,4 +1,5 @@
 mod commands;
+mod gpu;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -128,6 +129,22 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // Check GPU requirements at startup
+    match gpu::check_gpu_requirements() {
+        gpu::GpuCheckResult::NoGpu => {
+            gpu::print_no_gpu_error();
+            std::process::exit(1);
+        }
+        gpu::GpuCheckResult::LowVram(info) => {
+            if !gpu::prompt_low_vram_confirmation(&info)? {
+                std::process::exit(0);
+            }
+        }
+        gpu::GpuCheckResult::Ok(_) => {
+            // GPU meets requirements, continue
+        }
+    }
 
     match cli.command {
         Commands::Pull { model, file } => {
