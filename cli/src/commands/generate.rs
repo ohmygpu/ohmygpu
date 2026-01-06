@@ -5,6 +5,7 @@ use candle_core::Device;
 use ohmygpu_core::Config;
 use ohmygpu_runtime_diffusion::{detect_model_type, load_model, ImageGenRequest};
 use std::path::PathBuf;
+use chrono::Local;
 
 pub async fn execute(
     model: &str,
@@ -84,16 +85,18 @@ pub async fn execute(
     let elapsed = start.elapsed();
     println!("Generation completed in {:.2}s", elapsed.as_secs_f64());
 
+    // Resolve output path
+    let output_path = resolve_output_path(output)?;
+
     // Save image
-    println!("\nSaving to: {}", output);
-    save_image(&response.pixels, response.width, response.height, output)?;
+    println!("\nSaving to: {}", output_path.display());
+    save_image(&response.pixels, response.width, response.height, &output_path)?;
 
     println!("\nDone!");
     Ok(())
 }
 
 fn resolve_model_path(model: &str) -> Result<PathBuf> {
-    use hf_hub::api::sync::Api;
 
     // Check if it's an absolute path
     let path = PathBuf::from(model);
@@ -114,8 +117,21 @@ fn resolve_model_path(model: &str) -> Result<PathBuf> {
             return Ok(model_path);
         }
 
-        // Try with "models--" prefix (HuggingFace cache format)
+        // Try with repo name (e.g., "Tongyi-MAI--Z-Image-Turbo")
         let hf_name = model.replace('/', "--");
+        let model_dir = storage_path.join(&hf_name);
+        if model_dir.exists() {
+            // Check if it has snapshots subdirectory (HuggingFace structure)
+            let snapshots = model_dir.join("snapshots");
+            if snapshots.exists() {
+                if let Some(entry) = std::fs::read_dir(&snapshots)?.next() {
+                    return Ok(entry?.path());
+                }
+            }
+            return Ok(model_dir);
+        }
+
+        // Also check with "models--" prefix for backwards compatibility
         let hf_path = storage_path.join(format!("models--{}", hf_name));
         if hf_path.exists() {
             let snapshots = hf_path.join("snapshots");
@@ -131,7 +147,18 @@ fn resolve_model_path(model: &str) -> Result<PathBuf> {
     // Treat as HuggingFace repo ID - download all required files
     println!("Model not found locally, downloading from HuggingFace: {}", model);
 
-    let api = Api::new()?;
+    // Use configured storage path or default
+    let cache_dir = Config::load()
+        .map(|c| PathBuf::from(&c.models.storage_path))
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".config/ohmygpu/models")
+        });
+
+    let api = hf_hub::api::sync::ApiBuilder::new()
+        .with_cache_dir(cache_dir.clone())
+        .build()?;
     let repo = api.model(model.to_string());
 
     // Check if this is a valid HuggingFace repo by trying to get a file
@@ -143,6 +170,7 @@ fn resolve_model_path(model: &str) -> Result<PathBuf> {
     let _ = repo.get("tokenizer/tokenizer.json")?;
 
     println!("Downloading text encoder...");
+    let _ = repo.get("text_encoder/config.json");
     for i in 1..=3 {
         let file = format!("text_encoder/model-{:05}-of-00003.safetensors", i);
         if let Err(e) = repo.get(&file) {
@@ -151,6 +179,7 @@ fn resolve_model_path(model: &str) -> Result<PathBuf> {
     }
 
     println!("Downloading transformer...");
+    let _ = repo.get("transformer/config.json")?;
     for i in 1..=3 {
         let file = format!("transformer/diffusion_pytorch_model-{:05}-of-00003.safetensors", i);
         if let Err(e) = repo.get(&file) {
@@ -159,18 +188,22 @@ fn resolve_model_path(model: &str) -> Result<PathBuf> {
     }
 
     println!("Downloading VAE...");
+    let _ = repo.get("vae/config.json");
     let _ = repo.get("vae/diffusion_pytorch_model.safetensors")?;
 
-    // Get the cache path - hf_hub stores files in ~/.cache/huggingface/hub/
-    let hf_cache = dirs::cache_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?
-        .join("huggingface")
-        .join("hub");
-
+    // Get the model path from our configured cache
     let hf_name = model.replace('/', "--");
-    let model_cache = hf_cache.join(format!("models--{}", hf_name));
+    // hf-hub adds "models--" prefix
+    let model_cache_with_prefix = cache_dir.join(format!("models--{}", hf_name));
+    let model_cache_clean = cache_dir.join(&hf_name);
 
-    let snapshots = model_cache.join("snapshots");
+    // Auto-rename: remove "models--" prefix
+    if model_cache_with_prefix.exists() && !model_cache_clean.exists() {
+        std::fs::rename(&model_cache_with_prefix, &model_cache_clean)?;
+        println!("Renamed to: {}", model_cache_clean.display());
+    }
+
+    let snapshots = model_cache_clean.join("snapshots");
     if snapshots.exists() {
         // Get the most recent snapshot
         let mut entries: Vec<_> = std::fs::read_dir(&snapshots)?
@@ -189,7 +222,36 @@ fn resolve_model_path(model: &str) -> Result<PathBuf> {
     )
 }
 
-fn save_image(pixels: &[u8], width: u32, height: u32, path: &str) -> Result<()> {
+/// Resolve output path, defaulting to ~/Documents/ohmygpu/
+fn resolve_output_path(output: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(output);
+
+    // If it's an absolute path, use as-is
+    if path.is_absolute() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        return Ok(path);
+    }
+
+    // Default output directory: ~/Documents/ohmygpu/
+    let output_dir = dirs::document_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+        .join("ohmygpu");
+
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(&output_dir)?;
+
+    // If output is the default "output.png", generate a timestamped filename
+    if output == "output.png" {
+        let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+        Ok(output_dir.join(format!("image_{}.png", timestamp)))
+    } else {
+        Ok(output_dir.join(output))
+    }
+}
+
+fn save_image(pixels: &[u8], width: u32, height: u32, path: &PathBuf) -> Result<()> {
     // pixels are in RGB format, convert to image
     let img = image::RgbImage::from_raw(width, height, pixels.to_vec())
         .ok_or_else(|| anyhow::anyhow!("Failed to create image from pixels"))?;

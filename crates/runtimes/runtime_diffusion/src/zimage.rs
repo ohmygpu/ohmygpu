@@ -230,7 +230,7 @@ impl ZImagePipeline {
         latents = latents.unsqueeze(2)?; // Add frame dimension
 
         // Denoising loop
-        for _step in 0..num_steps {
+        for _ in 0..num_steps {
             let t = scheduler.current_timestep_normalized();
             let t_tensor =
                 Tensor::from_vec(vec![t as f32], (1,), &self.device)?.to_dtype(self.dtype)?;
@@ -276,9 +276,12 @@ impl ZImagePipeline {
         let image = image.i(0)?; // Remove batch dimension
 
         // Convert to RGB u8 pixels
+        // Image is in CHW format, need HWC for RgbImage
         let (c, h, w) = image.dims3()?;
         assert_eq!(c, 3, "Expected 3 channels");
 
+        // Transpose from CHW to HWC: (3, H, W) -> (H, W, 3)
+        let image = image.permute((1, 2, 0))?.contiguous()?;
         let image_data: Vec<u8> = image.flatten_all()?.to_vec1()?;
 
         Ok(ImageGenResponse {

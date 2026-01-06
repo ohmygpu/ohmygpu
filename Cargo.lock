@@ -2659,6 +2659,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "candle-core",
+ "chrono",
  "clap",
  "crossterm",
  "dirs 6.0.0",

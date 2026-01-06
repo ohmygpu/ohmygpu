@@ -35,5 +35,6 @@ tracing-subscriber.workspace = true
 self_update.workspace = true
 candle-core.workspace = true
 hf-hub.workspace = true
+chrono.workspace = true
 image = "0.25"
 dirs = "6"

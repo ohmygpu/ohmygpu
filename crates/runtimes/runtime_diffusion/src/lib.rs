@@ -82,34 +82,26 @@ pub fn load_model(
 
 /// Detect model type from config.json
 pub fn detect_model_type(model_path: &Path) -> Result<DiffusionModelType> {
-    // Check for Z-Image specific files
+    // Check transformer/config.json for model type
     let transformer_config = model_path.join("transformer").join("config.json");
     if transformer_config.exists() {
         let config_str = std::fs::read_to_string(&transformer_config)?;
-        if config_str.contains("ZImage") || config_str.contains("z_image") {
+        if config_str.contains("ZImage") {
             return Ok(DiffusionModelType::ZImage);
+        }
+        if config_str.contains("Flux") {
+            return Ok(DiffusionModelType::Flux);
         }
     }
 
     // Check for FLUX specific files
-    let flux_config = model_path.join("flux1-dev.safetensors");
-    if flux_config.exists() {
+    if model_path.join("flux1-dev.safetensors").exists()
+        || model_path.join("ae.safetensors").exists() {
         return Ok(DiffusionModelType::Flux);
     }
 
-    // Try to infer from directory name
-    let dir_name = model_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-
-    if dir_name.to_lowercase().contains("z-image") || dir_name.to_lowercase().contains("zimage") {
-        return Ok(DiffusionModelType::ZImage);
-    }
-
-    if dir_name.to_lowercase().contains("flux") {
-        return Ok(DiffusionModelType::Flux);
-    }
-
-    anyhow::bail!("Could not detect diffusion model type from path: {:?}", model_path)
+    anyhow::bail!(
+        "Could not detect model type. Ensure transformer/config.json exists at {:?}",
+        model_path
+    )
 }
