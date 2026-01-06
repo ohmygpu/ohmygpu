@@ -73,6 +73,48 @@ enum Commands {
         /// Value to set (if omitted, shows current value)
         value: Option<String>,
     },
+
+    /// Generate an image from a text prompt
+    Generate {
+        /// Model to use (e.g., "Tongyi-MAI/Z-Image-Turbo" or local path)
+        #[arg(short, long, default_value = "Tongyi-MAI/Z-Image-Turbo")]
+        model: String,
+
+        /// Text prompt for image generation
+        prompt: String,
+
+        /// Output file path
+        #[arg(short, long, default_value = "output.png")]
+        output: String,
+
+        /// Image width in pixels
+        #[arg(long, default_value_t = 1024)]
+        width: u32,
+
+        /// Image height in pixels
+        #[arg(long, default_value_t = 1024)]
+        height: u32,
+
+        /// Number of inference steps
+        #[arg(short, long, default_value_t = 9)]
+        steps: u32,
+
+        /// Guidance scale for CFG
+        #[arg(short, long, default_value_t = 5.0)]
+        guidance_scale: f32,
+
+        /// Negative prompt (for CFG)
+        #[arg(long)]
+        negative_prompt: Option<String>,
+
+        /// Random seed for reproducibility
+        #[arg(long)]
+        seed: Option<u64>,
+
+        /// Run on CPU instead of GPU
+        #[arg(long)]
+        cpu: bool,
+    },
 }
 
 #[tokio::main]
@@ -117,6 +159,32 @@ async fn main() -> Result<()> {
         }
         Commands::Config { key, value } => {
             commands::config::execute(key.as_deref(), value.as_deref()).await?;
+        }
+        Commands::Generate {
+            model,
+            prompt,
+            output,
+            width,
+            height,
+            steps,
+            guidance_scale,
+            negative_prompt,
+            seed,
+            cpu,
+        } => {
+            commands::generate::execute(
+                &model,
+                &prompt,
+                &output,
+                width,
+                height,
+                steps,
+                guidance_scale,
+                negative_prompt.as_deref(),
+                seed,
+                cpu,
+            )
+            .await?;
         }
     }
 

@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/runtimes/runtime_api",
     "crates/runtimes/runtime_candle",
+    "crates/runtimes/runtime_diffusion",
     "daemon",
     "cli",
 ]
@@ -19,6 +20,7 @@ repository = "https://github.com/ohmygpu/ohmygpu"
 ohmygpu_core = { path = "crates/core" }
 ohmygpu_runtime_api = { path = "crates/runtimes/runtime_api" }
 ohmygpu_runtime_candle = { path = "crates/runtimes/runtime_candle" }
+ohmygpu_runtime_diffusion = { path = "crates/runtimes/runtime_diffusion" }
 ohmygpu_daemon = { path = "daemon" }
 
 # Async runtime
@@ -62,9 +64,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 toml = "0.8"
 
 # Candle inference (with Metal/CUDA support)
-candle-core = "0.8"
-candle-nn = "0.8"
-candle-transformers = "0.8"
+# Using git version for Z-Image support
+candle-core = { git = "https://github.com/huggingface/candle", branch = "main" }
+candle-nn = { git = "https://github.com/huggingface/candle", branch = "main" }
+candle-transformers = { git = "https://github.com/huggingface/candle", branch = "main" }
 tokenizers = "0.20"
 hf-hub = "0.3"
 
