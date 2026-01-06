@@ -74,12 +74,18 @@ omg run microsoft/phi-2
 As a developer, I want to send chat requests to a running model
 So that I can integrate with my application
 
+# OpenAI-compatible API
 curl http://localhost:11434/v1/chat/completions \
+  -d '{"model": "microsoft/phi-2", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# Ollama-compatible API (drop-in replacement)
+curl http://localhost:11434/api/chat \
   -d '{"model": "microsoft/phi-2", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 **Acceptance criteria:**
 - OpenAI-compatible request/response format
+- Ollama-compatible API for drop-in replacement
 - Streaming support (SSE)
 - Works with Open WebUI, LangChain, etc.
 
@@ -163,6 +169,8 @@ InstallRecord { model_ref, revision, artifacts, local_path, installed_at }
 
 **API endpoints (v1):**
 
+OpenAI-compatible API:
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/v1/chat/completions` | POST | OpenAI-compatible chat |
@@ -170,6 +178,16 @@ InstallRecord { model_ref, revision, artifacts, local_path, installed_at }
 | `/v1/models/pull` | POST | Start model download |
 | `/v1/models/{id}` | DELETE | Remove model |
 | `/health` | GET | Daemon health check |
+
+Ollama-compatible API (drop-in replacement):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/chat` | POST | Chat with a model |
+| `/api/generate` | POST | Generate completion |
+| `/api/tags` | GET | List local models |
+| `/api/show` | POST | Show model info |
+| `/api/version` | GET | Version info |
 
 ### TR-5: ohmygpu_cli
 

@@ -133,6 +133,21 @@ With daemon, CLI/Tauri become mere "clients" - truly achieving "one capability s
 
 ---
 
+### ohmygpu_mcp (Bin)
+
+MCP (Model Context Protocol) server for Claude Desktop and other MCP clients.
+
+- Exposes local models as MCP tools
+- Connects to daemon via HTTP (same as CLI)
+- Runs as stdio server for MCP protocol
+
+**Available tools:**
+- `chat` - Chat with a local AI model
+- `list_models` - List installed models
+- `status` - Check daemon health
+
+---
+
 ### ohmygpu_desktop (Tauri Bin)
 
 - GUI (React/Vue)
@@ -174,6 +189,7 @@ ohmygpu/
 │       └── runtime_vllm/         # (future, production servers)
 ├── daemon/                       # ohmygpu_daemon (bin)
 ├── cli/                          # ohmygpu_cli (bin)
+├── mcp/                          # ohmygpu_mcp - MCP server for Claude Desktop
 ├── desktop/                      # ohmygpu_desktop (tauri bin)
 ├── assets/
 └── docs/
@@ -333,9 +349,23 @@ Not recommended: Using Tauri command to directly call core (works short-term, bl
 | `POST /v1/chat/completions` | Chat completions (streaming preferred) |
 | `POST /v1/images/generations` | (Future) Image generation |
 | `POST /v1/embeddings` | (Future) Embeddings |
-| `GET /v1/models` | (Future) Model list |
+| `GET /v1/models` | Model list |
 
-**Note:** No need to implement full OpenAI spec at once. Start with the most ecosystem-valuable: chat streaming.
+### Ollama-Compatible API (drop-in replacement)
+
+For users migrating from ollama, we support the native Ollama API format:
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/chat` | Chat with a model |
+| `POST /api/generate` | Generate completion |
+| `GET /api/tags` | List local models |
+| `POST /api/show` | Show model info |
+| `GET /api/version` | Version info |
+
+This allows existing ollama scripts and integrations to work without modification.
+
+**Note:** Start with the most ecosystem-valuable endpoints. OpenAI chat streaming + Ollama chat are the priorities.
 
 ---
 

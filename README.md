@@ -61,7 +61,9 @@ Devices with less than 8GB may run with warnings and can be unstable (OOM / slow
 
 ## API Endpoints
 
-ohmygpu exposes an OpenAI-compatible API on port `11434`:
+ohmygpu runs on port `11434` and supports **two API formats**:
+
+### OpenAI-compatible API
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -69,7 +71,59 @@ ohmygpu exposes an OpenAI-compatible API on port `11434`:
 | `/v1/models` | GET | List installed models |
 | `/health` | GET | Health check |
 
+```bash
+curl http://localhost:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "phi-2", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
 Works with Open WebUI, LangChain, and any OpenAI-compatible client.
+
+### Ollama-compatible API (drop-in replacement)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/chat` | POST | Chat with a model |
+| `/api/generate` | POST | Generate completion |
+| `/api/tags` | GET | List local models |
+| `/api/show` | POST | Show model info |
+| `/api/version` | GET | Version info |
+
+```bash
+curl http://localhost:11434/api/chat \
+  -d '{"model": "phi-2", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+Existing ollama scripts work without modification - just change the port if needed.
+
+### MCP Server (Claude Desktop integration)
+
+ohmygpu includes an MCP server for direct integration with Claude Desktop and other MCP clients.
+
+**Install:**
+```bash
+# Build the MCP server
+cargo build -p ohmygpu_mcp --release
+
+# Add to Claude Desktop config (~/.config/claude/claude_desktop_config.json)
+```
+
+```json
+{
+  "mcpServers": {
+    "ohmygpu": {
+      "command": "/path/to/ohmygpu-mcp"
+    }
+  }
+}
+```
+
+**Available tools:**
+| Tool | Description |
+|------|-------------|
+| `chat` | Chat with a local AI model |
+| `list_models` | List installed models |
+| `status` | Check daemon health |
 
 ## Why ohmygpu?
 
@@ -117,8 +171,9 @@ ohmygpu/
 │       ├── runtime_api/      # Runtime trait contract
 │       ├── runtime_candle/   # Rust-native inference (LLMs)
 │       └── runtime_diffusion/# Image generation (Flux, SD)
-├── daemon/                   # HTTP server, OpenAI API
-└── cli/                      # CLI binary
+├── daemon/                   # HTTP server, OpenAI/Ollama API
+├── cli/                      # CLI binary
+└── mcp/                      # MCP server for Claude Desktop
 ```
 
 **Data flow:**
