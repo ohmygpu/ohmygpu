@@ -1,4 +1,5 @@
 mod commands;
+mod daemon;
 mod gpu;
 
 use anyhow::Result;
@@ -30,7 +31,7 @@ enum Commands {
         daemon: bool,
 
         /// Port to listen on
-        #[arg(short, long, default_value = "11434")]
+        #[arg(short, long, default_value = "10692")]
         port: u16,
     },
 

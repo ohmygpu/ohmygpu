@@ -76,11 +76,11 @@ As a developer, I want to send chat requests to a running model
 So that I can integrate with my application
 
 # OpenAI-compatible API
-curl http://localhost:11434/v1/chat/completions \
+curl http://localhost:10692/v1/chat/completions \
   -d '{"model": "microsoft/phi-2", "messages": [{"role": "user", "content": "Hello"}]}'
 
 # Ollama-compatible API (drop-in replacement)
-curl http://localhost:11434/api/chat \
+curl http://localhost:10692/api/chat \
   -d '{"model": "microsoft/phi-2", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
@@ -221,7 +221,7 @@ Ollama-compatible API (drop-in replacement):
 | Framework | clap for args, ratatui for TUI |
 | Binary | `ohmygpu` (single binary), `omg` (symlink, preferred) |
 | Commands | Nested subcommands: `model`, `serve`, `gen`, `chat`, `mcp` |
-| Daemon connection | Connect via HTTP to localhost:11434 |
+| Daemon connection | Connect via HTTP to localhost:10692 |
 | Progress display | Download progress bars, streaming tokens |
 
 **CLI commands (v1):**
@@ -335,14 +335,16 @@ Other:
 
 ---
 
-## Open Questions
+## Design Decisions
 
-| Question | Options | Decision |
-|----------|---------|----------|
-| Default port | 11434 (ollama compat) vs 8080 vs custom | TBD |
-| Model directory | `~/.ohmygpu` vs `~/.cache/ohmygpu` vs XDG | TBD |
-| Auto-start daemon | CLI auto-starts if not running vs explicit `serve` | TBD |
-| HF token | Environment variable vs config file vs keychain | TBD |
+| Question | Decision |
+|----------|----------|
+| Default port | `10692` |
+| Config directory | `~/.config/ohmygpu/` |
+| Models directory | `~/.config/ohmygpu/models/` |
+| PID file | `~/.config/ohmygpu/daemon.pid` |
+| Auto-start daemon | Explicit `omg serve` required |
+| HF token | Environment variable `HF_TOKEN` |
 
 ---
 

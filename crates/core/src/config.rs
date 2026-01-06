@@ -66,7 +66,7 @@ pub struct InferenceConfig {
 }
 
 fn default_port() -> u16 {
-    11434
+    10692
 }
 
 fn default_host() -> String {

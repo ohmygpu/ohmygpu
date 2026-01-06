@@ -1,15 +1,23 @@
 //! Daemon server management
 
+use crate::daemon;
 use anyhow::Result;
 use std::net::SocketAddr;
-
-const DAEMON_URL: &str = "http://localhost:11434";
 
 /// Start the daemon in foreground
 pub async fn execute(port: u16) -> Result<()> {
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse()?;
 
-    println!("Starting ohmygpu daemon...");
+    // Write PID file for this process
+    let pid = std::process::id();
+    daemon::write_pid(pid)?;
+
+    // Set up cleanup on exit
+    let cleanup = || {
+        let _ = daemon::remove_pid_file();
+    };
+
+    println!("Starting ohmygpu daemon (PID: {})...", pid);
     println!("Listening on http://{}", addr);
     println!();
     println!("API endpoints:");
@@ -21,7 +29,10 @@ pub async fn execute(port: u16) -> Result<()> {
     println!("Press Ctrl+C to stop.");
     println!();
 
-    ohmygpu_daemon::run_server(addr).await?;
+    // Run server - cleanup on exit
+    let result = ohmygpu_daemon::run_server(addr).await;
+    cleanup();
+    result?;
 
     Ok(())
 }
@@ -29,57 +40,70 @@ pub async fn execute(port: u16) -> Result<()> {
 /// Start the daemon in background
 pub async fn execute_background(port: u16) -> Result<()> {
     // Check if already running
-    let client = reqwest::Client::new();
-    if let Ok(response) = client.get(format!("{}/health", DAEMON_URL)).send().await {
-        if response.status().is_success() {
+    let status = daemon::get_status().await;
+    if status.running {
+        if let Some(pid) = status.pid {
+            println!("Daemon is already running (PID: {})", pid);
+        } else {
             println!("Daemon is already running on port {}", port);
-            return Ok(());
         }
+        return Ok(());
     }
 
-    // For now, just print instructions
-    // TODO: Actually spawn a background process
+    // For now, provide instructions for background mode
+    // Full background spawn would require fork() or similar
     println!("To run in background, use:");
     println!("  nohup omg serve > /tmp/ohmygpu.log 2>&1 &");
     println!();
     println!("Or use a process manager like systemd/launchd.");
+    println!();
+    println!("The daemon will write its PID to ~/.config/ohmygpu/daemon.pid");
 
     Ok(())
 }
 
 /// Check daemon status
 pub async fn status() -> Result<()> {
-    let client = reqwest::Client::new();
+    let status = daemon::get_status().await;
 
-    match client.get(format!("{}/health", DAEMON_URL)).send().await {
-        Ok(response) if response.status().is_success() => {
-            println!("Daemon: running");
-            println!("URL: {}", DAEMON_URL);
+    if status.running {
+        print!("Daemon: running");
+        if let Some(pid) = status.pid {
+            println!(" (PID: {})", pid);
+        } else {
+            println!();
+        }
+        println!("URL: {}", status.url);
 
-            // Get loaded models
-            if let Ok(models_response) = client.get(format!("{}/v1/models", DAEMON_URL)).send().await
-            {
-                if let Ok(models) = models_response.json::<serde_json::Value>().await {
-                    if let Some(data) = models["data"].as_array() {
-                        if data.is_empty() {
-                            println!("Models loaded: none");
-                        } else {
-                            println!("Models loaded:");
-                            for model in data {
-                                if let Some(id) = model["id"].as_str() {
-                                    println!("  - {}", id);
-                                }
+        // Get loaded models
+        let client = reqwest::Client::new();
+        if let Ok(response) = client
+            .get(format!("{}/v1/models", status.url))
+            .send()
+            .await
+        {
+            if let Ok(models) = response.json::<serde_json::Value>().await {
+                if let Some(data) = models["data"].as_array() {
+                    if data.is_empty() {
+                        println!("Models loaded: none");
+                    } else {
+                        println!("Models loaded:");
+                        for model in data {
+                            if let Some(id) = model["id"].as_str() {
+                                println!("  - {}", id);
                             }
                         }
                     }
                 }
             }
         }
-        _ => {
-            println!("Daemon: not running");
-            println!();
-            println!("Start with: omg serve");
+    } else {
+        println!("Daemon: not running");
+        if let Some(pid) = status.pid {
+            println!("  (stale PID file found: {})", pid);
         }
+        println!();
+        println!("Start with: omg serve");
     }
 
     Ok(())
@@ -87,19 +111,23 @@ pub async fn status() -> Result<()> {
 
 /// Stop the daemon
 pub async fn stop() -> Result<()> {
-    let client = reqwest::Client::new();
+    let status = daemon::get_status().await;
 
-    // Check if running
-    match client.get(format!("{}/health", DAEMON_URL)).send().await {
-        Ok(response) if response.status().is_success() => {
-            // TODO: Send shutdown signal to daemon
-            // For now, just print instructions
-            println!("To stop the daemon, press Ctrl+C in the terminal where it's running,");
-            println!("or kill the process:");
-            println!("  pkill -f 'omg serve'");
-        }
-        _ => {
-            println!("Daemon is not running.");
+    if !status.running {
+        println!("Daemon is not running.");
+        return Ok(());
+    }
+
+    if daemon::stop_daemon().await? {
+        // Successfully stopped
+    } else {
+        println!("Failed to stop daemon automatically.");
+        println!();
+        println!("Try manually:");
+        if let Some(pid) = status.pid {
+            println!("  kill {}", pid);
+        } else {
+            println!("  pkill -f 'ohmygpu.*serve'");
         }
     }
 

@@ -32,7 +32,7 @@ omg serve
 omg chat microsoft/phi-2
 
 # Or chat via OpenAI-compatible API
-curl http://localhost:11434/v1/chat/completions \
+curl http://localhost:10692/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "microsoft/phi-2", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
@@ -89,7 +89,7 @@ Models are static assets. Use `omg model` to manage them.
 
 ## API Endpoints
 
-ohmygpu runs on port `11434` and supports **two API formats**:
+ohmygpu runs on port `10692` and supports **two API formats**:
 
 ### OpenAI-compatible API
 
@@ -100,7 +100,7 @@ ohmygpu runs on port `11434` and supports **two API formats**:
 | `/health` | GET | Health check |
 
 ```bash
-curl http://localhost:11434/v1/chat/completions \
+curl http://localhost:10692/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "phi-2", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
@@ -118,7 +118,7 @@ Works with Open WebUI, LangChain, and any OpenAI-compatible client.
 | `/api/version` | GET | Version info |
 
 ```bash
-curl http://localhost:11434/api/chat \
+curl http://localhost:10692/api/chat \
   -d '{"model": "phi-2", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
@@ -207,16 +207,25 @@ User → CLI → Daemon → Runtime (candle) → GPU
 
 ## Configuration
 
-Config file: `~/.config/ohmygpu/config.toml`
+All data lives in `~/.config/ohmygpu/`:
+
+```
+~/.config/ohmygpu/
+├── config.toml      # Configuration
+├── models/          # Downloaded models
+├── daemon.pid       # PID file (when running)
+└── registry.json    # Model registry
+```
+
+Config file example:
 
 ```toml
 [daemon]
-port = 11434
+port = 10692
 
 [inference]
 max_tokens = 2048
 temperature = 0.7
-use_gpu = true
 ```
 
 ## Supported Models

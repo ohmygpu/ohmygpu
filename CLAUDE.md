@@ -15,7 +15,7 @@ cargo run --bin ohmygpu -- <command>
 cargo run --bin ohmygpu -- search phi-2
 cargo run --bin ohmygpu -- model pull microsoft/phi-2
 cargo run --bin ohmygpu -- model list
-cargo run --bin ohmygpu -- serve --port 11434
+cargo run --bin ohmygpu -- serve --port 10692
 cargo run --bin ohmygpu -- chat microsoft/phi-2
 
 # Run tests (when implemented)

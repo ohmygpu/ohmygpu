@@ -21,7 +21,7 @@ use rmcp::{
 };
 use serde::Deserialize;
 
-const DAEMON_URL: &str = "http://localhost:11434";
+const DAEMON_URL: &str = "http://localhost:10692";
 
 // ============================================================================
 // Request types for tools

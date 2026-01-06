@@ -274,7 +274,7 @@ All UIs connect to it. This is your moat.
 - Content generation: `gen image` / `gen video`
 - Interactive: `chat <model>`
 - Utilities: `search` / `config` / `mcp` / `update`
-- Connects to daemon via HTTP (localhost:11434)
+- Connects to daemon via HTTP (localhost:10692)
 
 ---
 

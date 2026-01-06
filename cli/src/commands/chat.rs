@@ -3,7 +3,7 @@
 use anyhow::Result;
 use std::io::{self, BufRead, Write};
 
-const DAEMON_URL: &str = "http://localhost:11434";
+const DAEMON_URL: &str = "http://localhost:10692";
 
 pub async fn execute(model: &str) -> Result<()> {
     let client = reqwest::Client::new();
