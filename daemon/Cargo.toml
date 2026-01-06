@@ -1,0 +1,23 @@
+[package]
+name = "ohmygpu_daemon"
+description = "Daemon server for ohmygpu - OpenAI-compatible API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ohmygpu_core.workspace = true
+ohmygpu_runtime_api.workspace = true
+ohmygpu_runtime_candle.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
