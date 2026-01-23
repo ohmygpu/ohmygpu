@@ -2701,7 +2701,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_cli"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2735,7 +2735,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_core"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2753,7 +2753,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_daemon"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2776,7 +2776,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_runtime_api"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_runtime_candle"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2810,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_runtime_diffusion"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
