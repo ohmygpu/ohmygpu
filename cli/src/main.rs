@@ -1,294 +1,150 @@
+//! `ohmygpu` / `omg` — the official *administrative client* for the OhMyGPU
+//! Runtime. It is deliberately thin: every model/runtime operation goes through
+//! the same Management API third-party applications use. `omg serve` runs the
+//! runtime in-process (same code as the `ohmygpu-runtime` binary).
+
+mod client;
 mod commands;
-mod daemon;
-mod gpu;
+
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use ohmygpu_core::config::Config;
+use ohmygpu_core::paths::Paths;
 
-#[derive(Parser)]
-#[command(name = "ohmygpu")]
-#[command(author, version, about = "Unified local AI infrastructure", long_about = None)]
+use client::Client;
+
+#[derive(Parser, Debug)]
+#[command(name = "omg", bin_name = "omg", version, about = "OhMyGPU Runtime — administrative CLI", long_about = None)]
 struct Cli {
+    /// Runtime base URL (default: http://<config host>:<config port>)
+    #[arg(long, global = true, env = "OHMYGPU_URL")]
+    url: Option<String>,
+    /// Data directory (default ~/.config/ohmygpu)
+    #[arg(long, global = true, env = "OHMYGPU_HOME")]
+    data_dir: Option<PathBuf>,
+    /// Machine-readable JSON output where applicable
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Commands {
-    /// Model management (list, pull, remove, info, gc)
+    /// Run the runtime in the foreground (Ctrl-C to stop)
+    Serve {
+        /// Address to bind (default 127.0.0.1)
+        #[arg(long)]
+        host: Option<String>,
+        /// Port to listen on (default 10692)
+        #[arg(long, short)]
+        port: Option<u16>,
+        /// Log filter, e.g. `debug` or `info,llamacpp=debug`
+        #[arg(long, env = "OHMYGPU_LOG", default_value = "info")]
+        log: String,
+    },
+    /// Show runtime status (backend, models)
+    Status,
+    /// Show detected hardware
+    Hardware,
+    /// Manage model files (static assets)
     Model {
         #[command(subcommand)]
         action: ModelCommands,
     },
-
-    /// Daemon server management
-    Serve {
-        #[command(subcommand)]
-        action: Option<ServeCommands>,
-
-        /// Run in background (daemon mode)
-        #[arg(short, long)]
-        daemon: bool,
-
-        /// Port to listen on
-        #[arg(short, long, default_value = "10692")]
-        port: u16,
-    },
-
-    /// Generate content (image, video, audio)
-    Gen {
-        #[command(subcommand)]
-        action: GenCommands,
-    },
-
-    /// Interactive chat with a model
-    Chat {
-        /// Model to chat with
+    /// Start a model (blocks until it is running)
+    Run {
         model: String,
+        /// Context window (tokens)
+        #[arg(long)]
+        context_length: Option<u32>,
+        /// GPU layers to offload (default: all that fit)
+        #[arg(long)]
+        gpu_layers: Option<i32>,
+        /// CPU threads
+        #[arg(long)]
+        threads: Option<u32>,
     },
-
-    /// Start MCP server for Claude Desktop integration
-    Mcp,
-
-    /// View or set configuration
+    /// Stop a running model
+    Stop { model: String },
+    /// Ask the runtime to shut down cleanly
+    Shutdown,
+    /// View or set configuration (`omg config`, `omg config daemon.port`, `omg config daemon.port 1234`)
     Config {
-        /// Config key (e.g., "daemon.port", "inference.temperature")
         key: Option<String>,
-
-        /// Value to set (if omitted, shows current value)
         value: Option<String>,
     },
-
-    /// Search for models on HuggingFace
-    Search {
-        /// Search query
-        query: String,
-    },
-
-    /// Self-update to the latest version
-    Update,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum ModelCommands {
     /// List installed models
     #[command(alias = "ls")]
     List,
-
-    /// Pull/download a model from HuggingFace
+    /// Show the curated catalog of supported models
+    Catalog,
+    /// Download a model (catalog id, hf:owner/repo/file.gguf, or a direct URL)
     Pull {
-        /// Model identifier (e.g., "microsoft/phi-2")
         model: String,
-
-        /// Specific file to download
-        #[arg(short, long)]
-        file: Option<String>,
+        /// Install a non-catalog model under this id
+        #[arg(long)]
+        id: Option<String>,
     },
-
-    /// Remove an installed model
+    /// Remove an installed model (stops it first)
     #[command(alias = "rm")]
-    Remove {
-        /// Model name to remove
-        model: String,
-    },
-
-    /// Show model information
-    Info {
-        /// Model name
-        model: String,
-    },
-
-    /// Garbage collect unused cache files
-    Gc,
-}
-
-#[derive(Subcommand)]
-enum ServeCommands {
-    /// Check daemon status
-    Status,
-
-    /// Stop the daemon
-    Stop,
-}
-
-#[derive(Subcommand)]
-enum GenCommands {
-    /// Generate an image from a text prompt
-    Image {
-        /// Text prompt for image generation
-        prompt: String,
-
-        /// Model to use
-        #[arg(short, long, default_value = "Tongyi-MAI/Z-Image-Turbo")]
-        model: String,
-
-        /// Output file path
-        #[arg(short, long, default_value = "output.png")]
-        output: String,
-
-        /// Image width in pixels
-        #[arg(long, default_value_t = 1024)]
-        width: u32,
-
-        /// Image height in pixels
-        #[arg(long, default_value_t = 1024)]
-        height: u32,
-
-        /// Number of inference steps
-        #[arg(short, long, default_value_t = 9)]
-        steps: u32,
-
-        /// Guidance scale for CFG
-        #[arg(short, long, default_value_t = 5.0)]
-        guidance_scale: f32,
-
-        /// Negative prompt (for CFG)
-        #[arg(long)]
-        negative_prompt: Option<String>,
-
-        /// Random seed for reproducibility
-        #[arg(long)]
-        seed: Option<u64>,
-
-        /// Run on CPU instead of GPU
-        #[arg(long)]
-        cpu: bool,
-    },
-
-    /// Generate a video (coming soon)
-    Video {
-        /// Text prompt
-        prompt: String,
-    },
+    Remove { model: String },
+    /// Show details for a model
+    Info { model: String },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
-
+    // Behave like a normal Unix tool when piped into `head` etc.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
-
-    // MCP command skips GPU check (it just connects to daemon via HTTP)
-    if matches!(cli.command, Commands::Mcp) {
-        return commands::mcp::execute().await;
-    }
-
-    // Check GPU requirements at startup
-    match gpu::check_gpu_requirements() {
-        gpu::GpuCheckResult::NoGpu => {
-            gpu::print_no_gpu_error();
-            std::process::exit(1);
-        }
-        gpu::GpuCheckResult::LowVram(info) => {
-            if !gpu::prompt_low_vram_confirmation(&info)? {
-                std::process::exit(0);
-            }
-        }
-        gpu::GpuCheckResult::Ok(_) => {
-            // GPU meets requirements, continue
-        }
-    }
+    let paths = cli
+        .data_dir
+        .clone()
+        .map(Paths::new)
+        .unwrap_or_else(Paths::from_env);
+    let config = Config::load(&paths)?;
+    let base_url = cli
+        .url
+        .clone()
+        .unwrap_or_else(|| format!("http://{}:{}", config.daemon.host, config.daemon.port));
+    let client = Client::new(&base_url);
+    let json = cli.json;
 
     match cli.command {
-        // Model management
+        Commands::Serve { host, port, log } => {
+            commands::serve(paths, config, host, port, log).await
+        }
+        Commands::Status => commands::status(&client, json).await,
+        Commands::Hardware => commands::hardware(&client, json).await,
         Commands::Model { action } => match action {
-            ModelCommands::List => {
-                commands::models::execute().await?;
+            ModelCommands::List => commands::model_list(&client, &paths, json).await,
+            ModelCommands::Catalog => commands::model_catalog(&client, json).await,
+            ModelCommands::Pull { model, id } => {
+                commands::model_pull(&client, &model, id.as_deref(), json).await
             }
-            ModelCommands::Pull { model, file } => {
-                commands::pull::execute(&model, file.as_deref()).await?;
-            }
-            ModelCommands::Remove { model } => {
-                commands::remove::execute(&model).await?;
-            }
-            ModelCommands::Info { model } => {
-                commands::model_info::execute(&model).await?;
-            }
-            ModelCommands::Gc => {
-                commands::model_gc::execute().await?;
-            }
+            ModelCommands::Remove { model } => commands::model_remove(&client, &model).await,
+            ModelCommands::Info { model } => commands::model_info(&client, &model).await,
         },
-
-        // Serve daemon
-        Commands::Serve { action, daemon, port } => match action {
-            None => {
-                // Start server
-                if daemon {
-                    commands::serve::execute_background(port).await?;
-                } else {
-                    commands::serve::execute(port).await?;
-                }
-            }
-            Some(ServeCommands::Status) => {
-                commands::serve::status().await?;
-            }
-            Some(ServeCommands::Stop) => {
-                commands::serve::stop().await?;
-            }
-        },
-
-        // Generate content
-        Commands::Gen { action } => match action {
-            GenCommands::Image {
-                prompt,
-                model,
-                output,
-                width,
-                height,
-                steps,
-                guidance_scale,
-                negative_prompt,
-                seed,
-                cpu,
-            } => {
-                commands::generate::execute(
-                    &model,
-                    &prompt,
-                    &output,
-                    width,
-                    height,
-                    steps,
-                    guidance_scale,
-                    negative_prompt.as_deref(),
-                    seed,
-                    cpu,
-                )
-                .await?;
-            }
-            GenCommands::Video { prompt: _ } => {
-                println!("Video generation coming soon!");
-            }
-        },
-
-        // Interactive chat
-        Commands::Chat { model } => {
-            commands::chat::execute(&model).await?;
-        }
-
-        // MCP (handled above with early return)
-        Commands::Mcp => unreachable!(),
-
-        // Config
+        Commands::Run {
+            model,
+            context_length,
+            gpu_layers,
+            threads,
+        } => commands::run(&client, &model, context_length, gpu_layers, threads, json).await,
+        Commands::Stop { model } => commands::stop(&client, &model).await,
+        Commands::Shutdown => commands::shutdown(&client).await,
         Commands::Config { key, value } => {
-            commands::config::execute(key.as_deref(), value.as_deref()).await?;
-        }
-
-        // Search
-        Commands::Search { query } => {
-            commands::search::execute(&query).await?;
-        }
-
-        // Update
-        Commands::Update => {
-            commands::update::execute().await?;
+            commands::config(&paths, key.as_deref(), value.as_deref())
         }
     }
-
-    Ok(())
 }

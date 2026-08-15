@@ -1,6 +1,6 @@
 [package]
 name = "ohmygpu_cli"
-description = "CLI for ohmygpu"
+description = "OhMyGPU CLI: a thin administrative client for the OhMyGPU Runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,39 +9,17 @@ license.workspace = true
 name = "ohmygpu"
 path = "src/main.rs"
 
-[features]
-default = []
-metal = ["ohmygpu_runtime_diffusion/metal"]
-cuda = ["ohmygpu_runtime_diffusion/cuda"]
-
 [dependencies]
 ohmygpu_core.workspace = true
 ohmygpu_daemon.workspace = true
-ohmygpu_runtime_diffusion.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
-thiserror.workspace = true
-async-trait.workspace = true
-futures-util.workspace = true
 clap.workspace = true
-ratatui.workspace = true
-crossterm.workspace = true
-indicatif.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-self_update.workspace = true
-candle-core.workspace = true
-hf-hub.workspace = true
-chrono.workspace = true
-image = "0.25"
-dirs = "6"
-dialoguer = "0.11"
-rmcp = { version = "0.12", features = ["server", "macros", "transport-io"] }
-schemars = "1.2.0"
-walkdir = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

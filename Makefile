@@ -1,4 +1,4 @@
-.PHONY: build build-metal build-cuda push version patch minor major alpha beta
+.PHONY: build test test-e2e check push version patch minor major alpha beta
 
 BUILD_DIR := ./target/release
 CARGO_TOML := ./Cargo.toml
@@ -6,26 +6,23 @@ CARGO_TOML := ./Cargo.toml
 # Get current version from latest git tag (strips 'v' prefix)
 CURRENT_VERSION := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.1.0")
 
-# Build with Metal acceleration (Apple Silicon)
-build-metal:
-	cargo build --release --features metal
-
-# Build with CUDA acceleration (NVIDIA GPU)
-build-cuda:
-	cargo build --release --features cuda
-
-# Default build (auto-detect platform)
+# Release build of the runtime (`ohmygpu-runtime`) and the CLI (`ohmygpu`, alias `omg`).
+# No GPU toolchain needed: llama.cpp binaries are fetched at runtime per platform.
 build:
-	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		echo "Building with Metal support..."; \
-		cargo build --release --features metal; \
-	elif command -v nvcc >/dev/null 2>&1; then \
-		echo "Building with CUDA support..."; \
-		cargo build --release --features cuda; \
-	else \
-		echo "Error: No GPU acceleration available. Use 'make build-metal' or 'make build-cuda'."; \
-		exit 1; \
-	fi
+	cargo build --release
+	@echo "Built $(BUILD_DIR)/ohmygpu-runtime and $(BUILD_DIR)/ohmygpu"
+
+# Fast unit + API tests (mock backend; no GPU, no network)
+test:
+	cargo test --workspace
+
+# Real llama.cpp end-to-end test (downloads llama.cpp + a ~470 MB model)
+test-e2e:
+	OHMYGPU_E2E=1 cargo test -p ohmygpu_daemon --test e2e_llamacpp -- --ignored --nocapture
+
+check:
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets -- -D warnings
 
 push:
 	git push origin main --tags

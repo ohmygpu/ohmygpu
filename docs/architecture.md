@@ -1,386 +1,188 @@
-# OhMyGPU Architecture
+# OhMyGPU Runtime — Architecture
 
-## Vision
+> **OhMyGPU Runtime is the product. Everything else is a client.**
 
-**Stop juggling 5 different AI tools. One daemon, all workloads.**
+This document has three parts:
 
-ohmygpu is unified local AI infrastructure - replacing the fragmented landscape of single-purpose tools with one daemon, one model repository, and one API surface.
-
-### The Problem: Fragmentation
-
-| Category | Current Tools | Problems |
-|----------|---------------|----------|
-| **LLM inference** | ollama, LM Studio, LocalAI | Each has own model cache, own API, own format |
-| **Image generation** | ComfyUI, Automatic1111, Fooocus | Separate downloads, separate processes |
-| **Audio transcription** | whisper.cpp, faster-whisper | Yet another binary to manage |
-| **Model downloads** | huggingface-cli, civitai manual | No unified cache, no deduplication |
-| **GPU monitoring** | nvidia-smi, gpustat | Disconnected from workloads |
-
-### The Solution: Unified Infrastructure
-
-```
-Before:
-├── ollama          (LLMs, own model cache)
-├── ComfyUI         (images, own model cache)
-├── whisper.cpp     (audio, own model cache)
-└── 3 different UIs, 3 different APIs, duplicate 70GB models
-
-After:
-└── ohmygpu
-    ├── daemon      (one API, one model cache, one GPU scheduler)
-    ├── runtimes    (candle, llamacpp, comfyui, whisper)
-    └── UI          (TUI/Desktop, or Open WebUI via API)
-```
-
-### What ohmygpu Replaces
-
-| Category | Replaces | With Runtime |
-|----------|----------|--------------|
-| **LLM inference** | ollama, LM Studio | `runtime_candle`, `runtime_llamacpp` |
-| **Image generation** | ComfyUI, Automatic1111 | `runtime_comfyui` |
-| **Audio transcription** | whisper.cpp | `runtime_candle` (has Whisper support) |
-| **Model management** | huggingface-cli, manual downloads | `ohmygpu_core` |
-| **GPU scheduling** | nothing (users manage manually) | `ohmygpu_daemon` |
-
-### Key Differentiators
-
-| Aspect | ollama | ohmygpu |
-|--------|--------|---------|
-| Architecture | Monolithic | Modular (core + pluggable runtimes) |
-| Model formats | Own format, converts on import | HuggingFace ecosystem directly |
-| Workload types | LLMs only | LLMs, images, audio, video (via runtimes) |
-| Scope | Local CLI/API | Local + remote GPU boxes + fleet |
-| GPU scheduling | None (single model) | VRAM budget, concurrent models, queue |
-
-### Roadmap: Beyond AI Inference
-
-The name "ohmygpu" and the daemon + runtime architecture support GPU workloads beyond AI inference:
-
-| Phase | Focus | Runtimes |
-|-------|-------|----------|
-| **v1** | AI Inference | `runtime_candle` (LLMs + Whisper) |
-| **v2** | Wider AI + Training | `runtime_llamacpp`, `runtime_comfyui`, `runtime_trainer` (LoRA/fine-tune) |
-| **v3** | General GPU | `runtime_ffmpeg` (video transcode), `runtime_blender` (3D render) |
-
-**What fits the ohmygpu model:**
-
-Any workload that:
-- Needs GPU scheduling (avoid VRAM OOM)
-- Is a "job" with start/progress/end lifecycle
-- Benefits from unified queue and management
-
-| Category | Fits? | Why |
-|----------|-------|-----|
-| **Training/fine-tuning** | Yes | Same users, same models, natural extension |
-| **Video transcoding** | Yes | FFmpeg + NVENC, job-based, needs GPU scheduling |
-| **Video upscaling** | Yes | Real-ESRGAN etc., similar to image gen |
-| **3D rendering** | Maybe | Blender render jobs, different user base |
-| **Scientific compute** | No | Too specialized, custom CUDA kernels |
-
-**v1 principle:** Ship AI inference first. The architecture supports expansion, but focus wins.
+1. The engineering assessment of the code that existed before the v0.1 refocus
+   (what was kept, simplified, replaced, deferred, removed).
+2. The backend decision (llama.cpp vs. the existing Candle implementation).
+3. The v0.1 architecture as implemented.
 
 ---
 
-## Workspace Crates
+## Part 1 — Assessment of the pre-v0.1 `runtime` branch
 
-### ohmygpu_core (Lib, Pure Core)
+Snapshot assessed: commit `23b3356` (workspace of ~4.5k lines of Rust across
+`crates/core`, `crates/runtimes/{runtime_api,runtime_candle,runtime_diffusion}`,
+`daemon`, `cli`).
 
-Only handles stable, cross-platform concerns:
+| # | Area | Findings | Verdict |
+|---|------|----------|---------|
+| 1 | **Workspace structure** | Sensible split (core / runtime_api / runtimes / daemon / cli). Core was GPU‑agnostic as intended. But `metal`/`cuda` cargo features leaked from Candle all the way into the CLI (`cli/build.rs` refused to build without a GPU feature), and the whole workspace pulled the Candle git dependency tree (slow builds, unstable git pin). | **SIMPLIFY** — keep the crate split; remove Candle from the active workspace; no GPU cargo features anywhere. |
+| 2 | **Daemon** (`daemon/`) | axum server, CORS, tracing; `AppState` held one `CandleRuntime` and auto‑loaded a model on first request. Bound to `0.0.0.0` from the CLI. No lifecycle model, no management API, no graceful shutdown, no readiness. The `routes()` / `AppState` shape was reasonable. | **KEEP the skeleton, REPLACE the internals** — same crate, new orchestrator, explicit lifecycle, `127.0.0.1` default, management API, shutdown handling. |
+| 3 | **CLI** (`cli/`) | Mixed thin‑client commands (`chat`, `serve status`) with fat local logic (`model pull/list/rm` operated on the registry directly, `gen image` ran diffusion in‑process, `mcp` server, `update`, `search`, `config`, GPU gate with interactive prompt via `dialoguer`, `ratatui`/`crossterm` deps unused). | **SIMPLIFY** — rewrite as a thin HTTP client of the Management API. Remove `gen`, `chat`, `mcp`, `search`, `update`, TUI deps, GPU gate. |
+| 4 | **OpenAI API implementation** (`daemon/src/api/chat.rs`) | Working `/v1/chat/completions` (+SSE streaming) and `/v1/models`. Request/response types were hand‑rolled and mapped straight onto `runtime_api::ChatRequest` (so the OpenAI schema *was* the internal model). `prompt_tokens` hard‑coded to 0; no tools; no error object consistency. | **REPLACE** — keep the endpoint, re‑implement as a protocol adapter over the new internal inference model; add `/v1/responses`. |
+| 5 | **Ollama compatibility** (`daemon/src/api/ollama.rs`, 356 lines) | Five endpoints, partly stubbed (fake digests, `size: 0`, "unknown" details), and coupled to the old runtime types. Not free to keep once the runtime types change. | **REMOVE FROM ACTIVE WORKSPACE** — no longer a product requirement (brief §26). |
+| 6 | **Model management** (`core/registry.rs`, `core/models.rs`) | Simple JSON registry keyed by name; `ModelInfo` covered LLM/embedding/image/audio types; no lifecycle, no download state, no capabilities. Registry paths were global (hard to test). | **SIMPLIFY** — keep the JSON registry idea, make paths injectable, narrow to installed GGUF LLMs, add capabilities. Add a curated catalog and an explicit lifecycle state machine in the daemon. |
+| 7 | **Hugging Face integration** (`core/downloaders/huggingface.rs`) | Working single‑file streaming download with a "prefer Q4_K_M GGUF" heuristic; but progress went to stdout via `indicatif` inside the *library*, no resume, no token support, no cancellation, model dir naming `owner--repo`. `search` API only used by the CLI. | **SIMPLIFY/REUSE** — keep the HTTP download core, add resume (`Range`), `.part` files, HF token, progress callbacks; drop stdout printing and search. |
+| 8 | **Runtime abstraction** (`crates/runtimes/runtime_api`) | `Runtime` trait with `load/unload/chat/chat_stream` and `ChatRequest/ChatResponse` — protocol‑shaped and single‑model. No `available/prepare/start/stop/status` lifecycle, no process model. | **REPLACE** — new `RuntimeBackend` + `ModelInstance` traits operating on protocol‑independent inference types. |
+| 9 | **Candle inference** (`runtime_candle`, ~600 lines) | In‑process; safetensors only (no GGUF); two architectures (llama, phi) via `candle-transformers`; hard‑coded Llama‑2 prompt template; hand‑rolled sampler; the decode loop re‑fed the whole sequence each step; F32 on Metal; a backend crash would take the daemon down. Would require OhMyGPU to maintain per‑architecture model code and chat templates. | **DEFER** — archived under `archive/runtime_candle` (not built). See Part 2. |
+| 10 | **Diffusion** (`runtime_diffusion`, Z‑Image) | Working Z‑Image pipeline, but image generation is out of v0.1 scope. | **DEFER** — archived under `archive/runtime_diffusion` (not built). |
+| 11 | **Hardware detection** (`cli/src/gpu.rs`) | Metal detection via `sysctl`, CUDA via `nvidia-smi`; lived in the CLI and gated CLI startup with an interactive prompt. Not exposed over HTTP. | **REPLACE/MOVE** — moved into `core::hardware`, exposed via `GET /ohmygpu/v1/hardware`; no CLI gate. |
+| 12 | **Process / lifecycle management** | Only a PID file for the daemon (`cli/src/daemon.rs`) plus `pkill` fallback. No model lifecycle at all (a model was either loaded in‑process or not). | **REPLACE** — explicit per‑model state machine, backend subprocess supervision, crash detection, graceful shutdown. |
+| 13 | **Tests** | None. | **ADD** — unit + API tests with a mock backend; real llama.cpp end‑to‑end tests isolated behind `OHMYGPU_E2E=1`. |
 
-- HuggingFace API client
-- Downloader (resume, verification, concurrency, rate limiting)
-- Local model repository (manifest, indexing, deduplication, GC)
-- Run definition (RunSpec): model, parameters, VRAM budget, ports, etc.
-- Event stream: progress/log/events (for UI consumption)
+Summary of the classification:
 
-**Core Principle:** No direct GPU inference framework bindings. No libtorch, no CUDA.
-
----
-
-### ohmygpu_runtime_* (Pluggable Backends, Lib or Bin)
-
-Inference backends as plugins/adapters rather than embedded in core:
-
-- `ohmygpu_runtime_candle` (Rust-native, first runtime for PoC - LLMs + Whisper)
-- `ohmygpu_runtime_llamacpp` (wider model/quantization support, second priority)
-- `ohmygpu_runtime_comfyui` (future, image generation workflows)
-- `ohmygpu_runtime_vllm` (future, production server deployments)
-
-**Runtime responsibilities:**
-
-- Start/stop backend processes (or call libraries) based on RunSpec
-- Provide unified trait: `start()` / `stop()` / `health()` / `openai_endpoint()` etc.
-- Forward logs/status to core's event bus
-
----
-
-### ohmygpu_daemon (Bin, Strongly Recommended)
-
-The "moat container" for future capabilities:
-
-- Scheduling (concurrent models/tasks, VRAM strategy)
-- Model lifecycle (hot-swap, idle unloading)
-- External API (OpenAI-compatible + management API)
-
-With daemon, CLI/Tauri become mere "clients" - truly achieving "one capability set, multi-endpoint access".
-
----
-
-### ohmygpu_cli (Bin)
-
-- TUI (ratatui)
-- Calls daemon exclusively
-- Includes MCP server (`omg mcp` command)
-
-**MCP Server** (via `omg mcp`):
-
-MCP (Model Context Protocol) server for Claude Desktop and other MCP clients.
-
-- Exposes local models as MCP tools
-- Connects to daemon via HTTP
-- Runs as stdio server for MCP protocol
-
-Available tools: `chat`, `list_models`, `status`
-
----
-
-### ohmygpu_desktop (Tauri Bin, Future)
-
-- GUI (React/Vue)
-- Communicates with daemon via HTTP/WebSocket (cleaner and more extensible than direct Tauri command → Rust function calls)
-
----
-
-## Why GUI → Daemon Instead of Direct Tauri Commands?
-
-Direct "Tauri Command → core function" calls are convenient short-term but have two long-term problems:
-
-1. **Desktop App coupled to core:** Future remote management (another GPU machine on LAN) or Web UI support would require refactoring.
-
-2. **Complex process/task/log management:** Inference tasks are long-running, need streaming logs and cancellation; cramming these into Tauri commands becomes awkward.
-
-**Better structure:**
-
-- Desktop app includes daemon (starts one locally)
-- UI connects to daemon via websocket/http
-- CLI also connects to daemon
-
-This naturally supports: local / remote GPU box / multi-machine cluster (even "fleet" management later).
-
----
-
-## File Tree
-
-```
-ohmygpu/
-├── Cargo.toml                    # workspace root
-├── crates/
-│   ├── core/                     # ohmygpu_core
-│   ├── registry/                 # (optional) pure repository index/manifest/GC
-│   └── runtimes/
-│       ├── runtime_api/          # runtime trait + common types
-│       ├── runtime_candle/       # Rust-native (PoC - LLMs + Whisper)
-│       ├── runtime_llamacpp/     # (future, wider model support)
-│       ├── runtime_comfyui/      # (future, image generation)
-│       └── runtime_vllm/         # (future, production servers)
-├── daemon/                       # ohmygpu_daemon (lib)
-├── cli/                          # ohmygpu_cli (bin) - includes MCP server
-├── desktop/                      # ohmygpu_desktop (tauri bin, future)
-├── assets/
-└── docs/
+```text
+KEEP       axum daemon skeleton, JSON registry concept, HF download core, config layout (~/.config/ohmygpu)
+SIMPLIFY   workspace/features, CLI (thin client), registry, downloader
+REPLACE    runtime trait, OpenAI adapter, hardware detection, lifecycle/process mgmt
+DEFER      runtime_candle, runtime_diffusion (archived), Ollama API, MCP, TUI, self-update
+REMOVE     ollama.rs, gen/chat/mcp/search/update commands, GPU cargo features, ratatui/crossterm/dialoguer/rmcp/self_update deps
 ```
 
 ---
 
-## Crate Responsibilities
+## Part 2 — Backend decision: llama.cpp (subprocess) over Candle
 
-### 1. ohmygpu_core (Cross-platform Pure Core)
+Criteria from the brief, applied honestly:
 
-Only handles stable "model asset layer + run specification". Does not touch GPU inference implementation.
+| Criterion | Existing Candle backend | llama.cpp (`llama-server` subprocess) |
+|-----------|-------------------------|----------------------------------------|
+| Model compatibility | safetensors only; llama + phi architectures; every new family needs Rust code | Any GGUF; hundreds of architectures maintained upstream; quantized by default |
+| Maintenance burden | We own model code, chat templates, sampling, KV cache | We own an adapter (~800 lines) and a binary version pin |
+| Metal support | Yes (F32) | Yes, mature (prebuilt `macos-arm64` release) |
+| CUDA support | Yes (build‑time feature) | Yes (prebuilt Windows CUDA; Linux via user‑supplied build or Vulkan prebuilt) |
+| Streaming | Yes | Yes (SSE, OpenAI‑style) |
+| Tool calling | Not implemented; would need template + parser work per model | Built in (`--jinja`): Qwen 2.5/3, Llama 3.x, Mistral, Functionary, generic fallback |
+| Stability | Experimental | Widely deployed |
+| Process isolation | None (in‑process; crash kills daemon) | Full (separate OS process per running model) |
+| Embeddability | Ties the daemon binary to a specific GPU toolchain at build time | Daemon is a small pure‑Rust binary; backend binary is downloaded per platform at runtime |
+| Lifecycle management | Load/unload only | Start/stop/health per process; crash detection via exit status |
+| Speed to reliable v0.1 | Slow (many gaps) | Fast (adapter + orchestration only) |
 
-**Includes:**
+**Decision: llama.cpp is the v0.1 backend, driven as a supervised `llama-server` subprocess.**
+OhMyGPU orchestrates a proven runtime instead of maintaining an inference engine.
 
-- HuggingFace API interaction (model/file list, commit, etag, etc.)
-- Download management: concurrency, resume, verification, rate limiting, retry
-- Local model repository: directory structure, indexing, deduplication strategy, GC
-- `ModelRef` / `ModelRevision` / `Artifact` definitions ("model asset graph")
-- `RunSpec`: all declarative parameters for a single run (model, backend preference, VRAM budget, port, concurrency, etc.)
-- Events and progress: `EventStream` (download/run/error/log)
+Why a subprocess (HTTP to `llama-server` on `127.0.0.1:<ephemeral port>`) rather
+than FFI bindings (`llama-cpp-2`): process isolation, no C++/CMake/CUDA
+toolchain in our build, upstream chat‑template + tool‑call parsing comes with the
+server, and prebuilt release binaries make "hide the llama.cpp binary" achievable —
+OhMyGPU downloads the right release asset for the platform into
+`~/.config/ohmygpu/runtimes/llamacpp/<tag>/` on first use.
 
-**Outputs:**
-
-- Pure Rust API (sync/async both supported)
-- No HTTP output, no UI output, no process spawning
-
----
-
-### 2. runtimes/runtime_api (Backend Unified Interface Layer)
-
-The contract for "pluggable runtimes".
-
-**Includes:**
-
-- `Runtime` trait (lifecycle management)
-- `RuntimeCaps` (capability description: supports chat? images? video? streaming?)
-- `RuntimeConfig` (backend common params + extension point for backend-specific params)
-- Standardized status: `RuntimeStatus` (starting/running/degraded/stopped)
-- Standardized log/event model (for daemon to forward to clients)
-
-**Core principles:**
-
-- Runtime only implements "how to start, stop, health-check, and expose endpoint for a given backend"
-- Runtime does not do HF downloads (core handles that); runtime only receives core's output paths/manifest
+The Candle code is archived (not deleted) under `archive/`. It could return as an
+experimental adapter behind the same `RuntimeBackend` trait, outside the v0.1
+critical path.
 
 ---
 
-### 3. runtimes/runtime_* (Specific Backend Adapters)
+## Part 3 — v0.1 architecture
 
-Each runtime is an independent crate:
+```text
+Third-party application (Electron / Swift / Python / Tauri / ...)
+                │  HTTP (127.0.0.1:10692)
+                ▼
+┌───────────────────────────────────────────────────────────────┐
+│  ohmygpu-runtime (daemon)                                     │
+│                                                               │
+│   /v1/responses ─────▶ Responses adapter ──┐                  │
+│   /v1/chat/completions ▶ ChatCompletions ──┼─▶ InferenceRequest│
+│   /v1/models                       adapter │        │         │
+│                                            │        ▼         │
+│   /ohmygpu/v1/* ─▶ Management API ─▶ ModelManager (lifecycle) │
+│                                            │        │         │
+│                                            ▼        ▼         │
+│                                     RuntimeBackend / ModelInstance
+│                                       (runtime_llamacpp)      │
+└─────────────────────────────────────────────┬─────────────────┘
+                                              │ spawn + HTTP
+                                              ▼
+                                       llama-server (one per running model)
+                                              │
+                                        Metal / CUDA / Vulkan / CPU
+```
 
-- Transforms `RunSpec` + local model path → backend startup method (CLI/config file/HTTP)
-- Handles start/stop/health check/log capture
-- (Optional) Supports "model hot-swap" or "multi-model concurrency", unified via `runtime_api`
+### Workspace
 
-**Recommendation:** Start with `runtime_candle` for PoC (Rust-native, no subprocess management). Add `runtime_llamacpp` later for wider model/quantization support.
+```text
+crates/
+├── core/               ohmygpu_core        config, paths, hardware, catalog, registry, HF downloader, lifecycle state
+├── inference/          ohmygpu_inference   protocol-independent InferenceRequest/Response/StreamEvent, tools, errors
+├── runtime_api/        ohmygpu_runtime_api RuntimeBackend + ModelInstance traits
+└── runtime_llamacpp/   ohmygpu_runtime_llamacpp  llama-server locate/install/spawn/supervise + wire translation
+daemon/                 ohmygpu_daemon      axum server, ModelManager, protocol adapters, management API, `ohmygpu-runtime` bin
+cli/                    ohmygpu_cli         thin HTTP client (`ohmygpu` / `omg`)
+archive/                deferred code (candle, diffusion) — not part of the workspace
+```
 
----
+### One inference pipeline
 
-### 4. ohmygpu_daemon (System Hub, Strongly Recommended)
+Both `/v1/responses` and `/v1/chat/completions` are *protocol adapters*:
 
-All UIs connect to it. This is your moat.
+```text
+external JSON ──parse──▶ InferenceRequest ──▶ ModelManager.instance(model) ──▶ ModelInstance.infer_stream()
+                                                                                       │
+external JSON ◀─serialize── InferenceResponse / StreamEvent ◀───────────────────────────┘
+```
 
-**Responsibilities:**
+`InferenceRequest` (crate `ohmygpu_inference`) carries: model id, ordered
+`InputItem`s (`Message{role,content}`, `ToolCall`, `ToolResult`), `ToolDefinition`s,
+`ToolChoice`, and `GenerationOptions` (max tokens, temperature, top_p, stop, seed,
+penalties). Runtime adapters never see OpenAI schemas. Non‑streaming inference is
+implemented by collecting the streaming events, so both endpoints and both modes
+share exactly one path through the backend.
 
-- Local/remote unified entry (unchanged for future multi-machine)
-- Persistent config: installed models, recent usage, default runtime, token/ACL
-- Scheduling: which models/tasks run concurrently; resource strategy (VRAM budget/concurrency/queue)
-- Lifecycle: start/stop/restart runtime; crash recovery; health patrol
+### Explicit model lifecycle
 
-**External APIs:**
+```text
+not_installed ─pull─▶ downloading ─▶ installed ─start─▶ starting ─▶ running ─stop─▶ stopping ─▶ stopped
+                          │                                │           │
+                          └──▶ error ◀─────────────────────┴───────────┘ (crash / failed start)
+```
 
-- OpenAI-compatible (at minimum: chat/completions + streaming)
-- Management API (models list/install/remove/status/logs)
-- Event channel (WebSocket/SSE)
+`GET /ohmygpu/v1/models/{id}` always reports the state plus `download` progress,
+`error.message`, and `runtime` details (backend, pid, port) when running.
 
----
+### Backend contract (`ohmygpu_runtime_api`)
 
-### 5. ohmygpu_cli (TUI / Power Users)
+```rust
+trait RuntimeBackend {  id(); available(); prepare(); start(spec) -> ModelInstance }
+trait ModelInstance  {  status(); infer(); infer_stream(); wait(); stop() }
+```
 
-**Responsibilities:**
+`prepare()` for llama.cpp resolves the binary in this order: explicit config path →
+`OHMYGPU_LLAMA_SERVER` env → managed install dir → `PATH`; if none is found and
+`auto_install` is on (default), it downloads the matching GitHub release asset.
 
-- "k9s/nvidia-smi style": view downloads, tasks, runtime status
-- Model management: `model list` / `model pull` / `model rm` / `model info` / `model gc`
-- Daemon control: `serve` / `serve status` / `serve stop`
-- Content generation: `gen image` / `gen video`
-- Interactive: `chat <model>`
-- Utilities: `search` / `config` / `mcp` / `update`
-- Connects to daemon via HTTP (localhost:10692)
+### Storage / configuration
 
----
+```text
+$OHMYGPU_HOME (default ~/.config/ohmygpu)/
+├── config.toml
+├── registry.json            installed models
+├── models/<model-id>/*.gguf
+├── runtimes/llamacpp/<tag>/llama-server (+ libs)
+└── daemon.json              pid/port of the running daemon
+```
 
-### 6. ohmygpu_desktop (General Users)
+Everything the daemon writes lives under one directory, so an application that
+bundles the runtime can point it at its own data dir with `--data-dir` /
+`OHMYGPU_HOME`.
 
-**Responsibilities:**
+### Security defaults
 
-- UI only (model management, run, logs, doctor)
-- Default starts embedded daemon with app (or prompts to install daemon)
-- Communicates with daemon via HTTP/WebSocket
+Binds `127.0.0.1` only. No auth, no accounts. Configurable host for advanced users.
 
-Not recommended: Using Tauri command to directly call core (works short-term, blocks remote/multi-endpoint long-term).
+### Known limitations (v0.1)
 
----
-
-## Key Data Structures
-
-### Model Asset Layer
-
-| Structure | Fields |
-|-----------|--------|
-| `ModelRef` | `provider: HF \| Local \| URL`, `repo: "org/name"`, `kind: LLM \| Diffusion \| Video \| ...` |
-| `Revision` | `branch/tag/commit`, `resolved_commit_hash` |
-| `Artifact` | `filename`, `size`, `sha256?`, `etag?`, `format: gguf \| safetensors \| ...` |
-| `InstallRecord` | `model_ref`, `revision`, `artifacts[]`, `local_paths`, `installed_at` |
-
-### RunSpec (Declarative Run Specification)
-
-- `run_id`
-- `model_ref` + `revision`
-- `preferred_runtime` (optional; empty lets scheduler choose)
-- `mode`: chat | image | video | embeddings | ...
-- `resources`: `{ gpu_id?, vram_budget_mb?, max_concurrency?, cpu_threads? }`
-- `network`: `{ bind_addr, port, auth_token?, cors? }`
-- `params`: `{ temperature, top_p, steps, cfg_scale, ... }` (common + extension fields)
-
-### Runtime Contract
-
-| Method | Description |
-|--------|-------------|
-| `caps()` | What the runtime can do |
-| `prepare(run_spec, install_record)` | Generate runtime plan for backend startup (CLI/config/port) |
-| `start(plan)` | Start the runtime |
-| `stop(run_id)` | Stop a running instance |
-| `status(run_id)` | Get current status |
-| `logs(run_id)` | Get logs |
-| `endpoint(run_id)` | Return OpenAI-compatible base_url or backend native endpoint |
-
----
-
-## API Skeleton (Daemon External)
-
-### Management API
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /v1/health` | Health check |
-| `GET /v1/models` | Installed models list (with usage, revision) |
-| `POST /v1/models/install` | HF repo + revision → start download (returns job_id) |
-| `GET /v1/jobs/{id}` | Download/install progress |
-| `POST /v1/runs` | Submit RunSpec → returns run_id |
-| `GET /v1/runs` | All run statuses |
-| `POST /v1/runs/{id}/stop` | Stop a run |
-| `GET /v1/runs/{id}/logs` | Get run logs |
-| `GET /v1/events` (WS/SSE) | Unified event stream (download, run, error, alert) |
-
-### OpenAI-Compatible API
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /v1/chat/completions` | Chat completions (streaming preferred) |
-| `POST /v1/images/generations` | (Future) Image generation |
-| `POST /v1/embeddings` | (Future) Embeddings |
-| `GET /v1/models` | Model list |
-
-### Ollama-Compatible API (drop-in replacement)
-
-For users migrating from ollama, we support the native Ollama API format:
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /api/chat` | Chat with a model |
-| `POST /api/generate` | Generate completion |
-| `GET /api/tags` | List local models |
-| `POST /api/show` | Show model info |
-| `GET /api/version` | Version info |
-
-This allows existing ollama scripts and integrations to work without modification.
-
-**Note:** Start with the most ecosystem-valuable endpoints. OpenAI chat streaming + Ollama chat are the priorities.
-
----
-
-## Design Principles (Anti-patterns to Avoid)
-
-### 1. Don't bind inference frameworks in core
-
-> No tch/libtorch/CUDA in core.
-> Make these runtime plugins. Core only handles assets/specifications.
-
-### 2. Don't let desktop UI directly call core
-
-> UI only connects to daemon.
-> This naturally supports remote GPU box, CLI sharing, WebUI sharing.
-
-### 3. Don't hardcode model download directory structure
-
-> Define manifest/index first. Directory is just implementation detail.
-> Future deduplication/shared cache/cross-machine sync will be much easier.
+- One `llama-server` process per running model; concurrent requests to the same
+  model are queued by llama.cpp (`-np` auto).
+- If the daemon is SIGKILLed, child `llama-server` processes may be orphaned
+  (normal shutdown, SIGTERM and Ctrl‑C stop them).
+- Managed backend install covers macOS (arm64/x64, Metal), Linux x64/arm64 (CPU, or
+  Vulkan when a GPU is detected), Windows x64 (CPU/Vulkan). CUDA builds and other
+  targets: point `backend.llamacpp.server_path` at your own build.
+- No response persistence, conversations, or hosted tools (by design).
