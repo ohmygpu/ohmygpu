@@ -3,14 +3,20 @@
 **OhMyGPU Runtime is open-source local AI infrastructure for application developers.** It runs open-source models behind OpenAI-compatible APIs and manages the GPU runtime, model files, and model lifecycle so your application doesn't have to.
 
 ```text
-Your application (Electron / Swift / Python / Tauri / .NET / Go / …)
+Your application
+(Electron / Swift / Python / Tauri / .NET / Go / …)
         │  HTTP on 127.0.0.1:10692
         ▼
 OhMyGPU Runtime  ──  headless daemon
-        │   /v1/responses · /v1/chat/completions · /v1/models      (inference, OpenAI-compatible subset)
-        │   /ohmygpu/v1/*                                           (model & runtime management)
+        │  /v1/responses · /v1/chat/completions · /v1/models
+        │      (inference, OpenAI-compatible subset)
+        │  /ohmygpu/v1/*
+        │      (model & runtime management)
         ▼
-llama.cpp (supervised subprocess per running model)  →  Metal / CUDA / Vulkan / CPU
+llama.cpp  ──  supervised subprocess per running model
+        │
+        ▼
+Metal / CUDA / Vulkan / CPU
 ```
 
 | Component | Role |
