@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_daemon"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_inference"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "futures-util",
  "serde",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_runtime_api"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "ohmygpu_runtime_llamacpp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-stream",
  "async-trait",
