@@ -38,6 +38,8 @@ Your app tells the runtime *ensure model exists → start model*, then uses the 
 
 Requires: macOS (Apple Silicon or Intel), Linux x86_64/arm64, or Windows x86_64. A GPU is used when present (Metal / Vulkan / CUDA); CPU works too.
 
+Prebuilt `ohmygpu-runtime` + `ohmygpu` binaries are on the [Releases page](https://github.com/ohmygpu/ohmygpu/releases); or build from source:
+
 ```bash
 # build (no GPU toolchain needed — llama.cpp is fetched at runtime)
 make build            # → target/release/ohmygpu-runtime and target/release/ohmygpu

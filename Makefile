@@ -58,11 +58,12 @@ patch minor major: version
 	}') && \
 	echo "New version: $$NEW_VERSION" && \
 	sed -i '' 's/^version = ".*"/version = "'$$NEW_VERSION'"/' $(CARGO_TOML) && \
-	git add $(CARGO_TOML) && \
+	cargo update -q --workspace && \
+	git add $(CARGO_TOML) Cargo.lock && \
 	git commit -m "chore: bump version to v$$NEW_VERSION" && \
 	git tag "v$$NEW_VERSION" && \
 	echo "Created tag v$$NEW_VERSION" && \
-	echo "Run 'make push' to push changes and trigger release"
+	echo "Run 'make push' to push the tag; .github/workflows/release.yml builds and publishes the binaries"
 
 alpha beta: version
 	@TYPE=$@ && \
@@ -82,8 +83,9 @@ alpha beta: version
 	fi && \
 	echo "New version: $$NEW_VERSION" && \
 	sed -i '' 's/^version = ".*"/version = "'$$NEW_VERSION'"/' $(CARGO_TOML) && \
-	git add $(CARGO_TOML) && \
+	cargo update -q --workspace && \
+	git add $(CARGO_TOML) Cargo.lock && \
 	git commit -m "chore: bump version to v$$NEW_VERSION" && \
 	git tag "v$$NEW_VERSION" && \
 	echo "Created tag v$$NEW_VERSION" && \
-	echo "Run 'make push' to push changes and trigger release"
+	echo "Run 'make push' to push the tag; .github/workflows/release.yml builds and publishes the binaries"
