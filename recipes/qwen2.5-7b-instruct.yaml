@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=../schemas/recipe-v1.json
+#
+# Example recipe: a GGUF-first model (today's curated catalog entry) with an
+# optional safetensors variant for GPU boxes.
+schema_version: 1
+id: qwen2.5-7b-instruct
+display_name: Qwen2.5 7B Instruct
+family: qwen2.5
+license: apache-2.0
+homepage: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
+context_length: 32768
+capabilities: { tools: true }
+
+backend: llamacpp                 # default for variants below
+source:
+  hf: bartowski/Qwen2.5-7B-Instruct-GGUF
+
+chat:
+  tool_call_parser: hermes
+
+engine:
+  context_length: 8192
+
+variants:
+  - name: q4_k_m
+    source: { file: Qwen2.5-7B-Instruct-Q4_K_M.gguf }   # refines: inherits the repo above
+    quantization: q4_k_m
+    size_gb: 4.7
+    requires: { vram_gb: 6, ram_gb: 8 }
+
+  - name: q8_0
+    source: { file: Qwen2.5-7B-Instruct-Q8_0.gguf }
+    quantization: q8_0
+    size_gb: 8.1
+    requires: { vram_gb: 10, ram_gb: 12 }
+
+  - name: bf16
+    backend: vllm
+    source: { hf: Qwen/Qwen2.5-7B-Instruct }              # new repo → replaces the recipe source
+    quantization: bf16
+    size_gb: 15.2
+    requires: { vram_gb: 20, min_compute_capability: "8.0" }
+
+tests:
+  - prompt: "Reply with exactly: pong"
+    expect_contains: pong

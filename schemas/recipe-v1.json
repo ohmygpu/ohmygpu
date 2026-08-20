@@ -1,0 +1,874 @@
+{
+  "$defs": {
+    "Accelerator": {
+      "description": "GPU / compute API a variant can run on.",
+      "enum": [
+        "cuda",
+        "metal",
+        "rocm",
+        "cpu"
+      ],
+      "type": "string"
+    },
+    "Backend": {
+      "description": "Inference backend that runs a variant.",
+      "oneOf": [
+        {
+          "const": "vllm",
+          "description": "vLLM (`vllm serve`): safetensors, CUDA; day-0 coverage through its\nTransformers modeling backend.",
+          "type": "string"
+        },
+        {
+          "const": "llamacpp",
+          "description": "llama.cpp (`llama-server`): GGUF; CUDA, Metal, CPU.",
+          "type": "string"
+        }
+      ]
+    },
+    "Capabilities": {
+      "additionalProperties": false,
+      "description": "What the model can do. All default to `false`.",
+      "properties": {
+        "reasoning": {
+          "default": false,
+          "description": "Emits separable reasoning / thinking content.",
+          "type": "boolean"
+        },
+        "tools": {
+          "default": false,
+          "description": "Native tool calling works (verified with a smoke test).",
+          "type": "boolean"
+        },
+        "vision": {
+          "default": false,
+          "description": "Accepts image inputs.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Chat": {
+      "additionalProperties": false,
+      "description": "How the model talks.",
+      "properties": {
+        "reasoning_parser": {
+          "description": "How reasoning content is delimited. Names follow vLLM's\n`--reasoning-parser` vocabulary (`deepseek_r1`, `qwen3`, `glm45`, …).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stop": {
+          "description": "Extra stop strings applied to every request.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatTemplate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override the chat template shipped in `tokenizer_config.json` / the GGUF."
+        },
+        "tool_call_parser": {
+          "description": "How tool calls appear in the model's output. Names follow vLLM's\n`--tool-call-parser` vocabulary (`hermes`, `llama3_json`, `mistral`,\n`qwen3_coder`, `deepseek_v3`, `glm45`, `kimi_k2`, …). llama.cpp derives\nthis from the Jinja template and ignores the field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ChatTemplate": {
+      "additionalProperties": false,
+      "description": "A Jinja chat template, either a file next to the recipe or inline.",
+      "properties": {
+        "file": {
+          "description": "Path relative to the recipe file, e.g. `templates/qwen3.jinja`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inline": {
+          "description": "The template text itself (use a YAML `|` block).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Engine": {
+      "additionalProperties": false,
+      "description": "Engine settings. The backend-agnostic scalars are mapped by every backend;\n`vllm` / `llamacpp` hold the stable, high-value flags of each engine plus an\n`extra_args` / `env` escape hatch for everything else. New exotic flags go\ninto `extra_args` first and are promoted to typed fields once common.",
+      "properties": {
+        "context_length": {
+          "description": "Context window to allocate. Must not exceed the recipe's `context_length`.\nDefault: the backend's default, capped by the model's native length.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "llamacpp": {
+          "$ref": "#/$defs/LlamaCppSettings"
+        },
+        "max_concurrency": {
+          "description": "Concurrent sequences (vLLM `--max-num-seqs`, llama.cpp `--parallel`).",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tensor_parallel": {
+          "description": "GPUs to shard across (vLLM `--tensor-parallel-size`). llama.cpp splits\nlayers across visible GPUs on its own and ignores this.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "vllm": {
+          "$ref": "#/$defs/VllmSettings"
+        }
+      },
+      "type": "object"
+    },
+    "Format": {
+      "description": "Weight file format.",
+      "enum": [
+        "safetensors",
+        "gguf"
+      ],
+      "type": "string"
+    },
+    "GenerationDefaults": {
+      "additionalProperties": false,
+      "description": "Sampling defaults recommended by the model authors.",
+      "properties": {
+        "frequency_penalty": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_output_tokens": {
+          "description": "Default cap on generated tokens when a request does not set one.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_p": {
+          "format": "float",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "presence_penalty": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "repetition_penalty": {
+          "format": "float",
+          "minimum": 0.0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "temperature": {
+          "format": "float",
+          "minimum": 0.0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "top_k": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "top_p": {
+          "format": "float",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "LlamaCppSettings": {
+      "additionalProperties": false,
+      "description": "llama.cpp-specific settings (`llama-server` flags).",
+      "properties": {
+        "batch_size": {
+          "description": "`--batch-size`.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cache_type_k": {
+          "description": "`--cache-type-k` (`f16`, `q8_0`, `q4_0`, …).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cache_type_v": {
+          "description": "`--cache-type-v`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables for the engine process.",
+          "type": "object"
+        },
+        "extra_args": {
+          "description": "Raw extra CLI arguments, appended last. Variant values append to recipe values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "flash_attention": {
+          "description": "`--flash-attn`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "gpu_layers": {
+          "description": "`--n-gpu-layers`. Default: all that fit.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_release": {
+          "description": "Oldest llama.cpp release known to run this model, e.g. `b6000`.",
+          "pattern": "^b[0-9]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mlock": {
+          "description": "`--mlock`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mmap": {
+          "description": "`--mmap` / `--no-mmap`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "threads": {
+          "description": "`--threads`.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ubatch_size": {
+          "description": "`--ubatch-size`.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ModelKind": {
+      "description": "Kind of model. v1: `llm` only.",
+      "enum": [
+        "llm"
+      ],
+      "type": "string"
+    },
+    "Platform": {
+      "description": "Operating system a variant can run on.",
+      "enum": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "type": "string"
+    },
+    "Requirements": {
+      "additionalProperties": false,
+      "description": "Hardware requirements of a variant, as measured for its `engine.context_length`.",
+      "properties": {
+        "accelerators": {
+          "description": "Accelerators this variant runs on. Empty = whatever the backend supports\n(vLLM: cuda; llama.cpp: cuda, metal, cpu).",
+          "items": {
+            "$ref": "#/$defs/Accelerator"
+          },
+          "type": "array"
+        },
+        "gpus": {
+          "description": "Number of GPUs used. Default 1. Should match `engine.tensor_parallel` for vLLM.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_compute_capability": {
+          "description": "Minimum NVIDIA compute capability as `major.minor` (`\"7.5\"` Turing,\n`\"8.0\"` Ampere, `\"8.9\"` Ada, `\"9.0\"` Hopper). bf16 needs 8.0, fp8 8.9.\nQuote it in YAML — `8.0` unquoted is the number 8.",
+          "pattern": "^[0-9]+\\.[0-9]$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platforms": {
+          "description": "Operating systems this variant runs on. Empty = any the backend supports.",
+          "items": {
+            "$ref": "#/$defs/Platform"
+          },
+          "type": "array"
+        },
+        "ram_gb": {
+          "description": "System RAM needed in GB (CPU inference, or mmap'd GGUF).",
+          "format": "double",
+          "minimum": 0.0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vram_gb": {
+          "description": "Total GPU memory needed in GB across all GPUs used (weights + KV cache\nat the variant's context length). On Apple Silicon this is unified memory.",
+          "format": "double",
+          "minimum": 0.0,
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SmokeTest": {
+      "additionalProperties": false,
+      "description": "A smoke test: one prompt, one expectation. With no `expect_*` the test\nonly requires a successful, non-empty response.",
+      "properties": {
+        "expect_contains": {
+          "description": "The response text must contain this substring (case-insensitive).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expect_regex": {
+          "description": "The response text must match this regular expression.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expect_tool_call": {
+          "description": "The runtime sends a fixed `get_weather(city)` tool definition with the\nprompt and requires the model to answer with a tool call. Use on\nrecipes that claim `capabilities.tools`.",
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "description": "Generation cap for this test. Default 32.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "description": "User message to send.",
+          "type": "string"
+        },
+        "system": {
+          "description": "Optional system message.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "description": "Where weights come from. Exactly one of `hf` or `url`.\n\nMerge rule (recipe `source` → variant `source`): a variant that names a new\n*location* (`hf` or `url`) replaces the recipe source entirely; a variant\nthat only sets `file` / `include` / `exclude` / `revision` refines it and\ninherits the rest.",
+      "properties": {
+        "exclude": {
+          "description": "Glob patterns to skip, applied after `include`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "file": {
+          "description": "One file inside the repo — the GGUF to load. For sharded GGUF name the\nfirst shard (`…-00001-of-00005.gguf`); llama.cpp finds the rest.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hf": {
+          "description": "Hugging Face repo id, `owner/name`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "include": {
+          "description": "Glob patterns of repo files to download. Empty = the downloader's\ndefault (every weight, tokenizer and config file; no `original/`, no\nlegacy `.bin`/`.pth` when safetensors exist).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "description": "Git revision on the Hub (branch, tag or commit). Default: the repo's default branch.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "Direct http(s) URL to a single file (self-hosted GGUF). Cannot be\ncombined with `hf`, `file`, `include`, `exclude` or `revision`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Variant": {
+      "additionalProperties": false,
+      "description": "One concrete way to run the model.",
+      "properties": {
+        "backend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Backend"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Backend for this variant. Default: the recipe's `backend`, else inferred\nfrom the source (GGUF → `llamacpp`, otherwise `vllm`)."
+        },
+        "description": {
+          "description": "Why this variant exists / when to pick it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine": {
+          "$ref": "#/$defs/Engine",
+          "description": "Engine settings merged over the recipe's `engine`."
+        },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Weight format. Default: inferred from the source / backend."
+        },
+        "name": {
+          "description": "Unique within the recipe; same character rules as model ids\n(`bf16`, `fp8`, `awq`, `q4_k_m`, `bf16-tp2`, …). Users can force one\nwith `omg run <id>@<variant>` / `\"variant\"` in the start request.",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "type": "string"
+        },
+        "quantization": {
+          "description": "Human label of the precision / quantization: `bf16`, `fp16`, `fp8`,\n`awq`, `gptq`, `int4`, `q4_k_m`, `q8_0`, … Used for display and for\n`--quant` filters; engines read the real quantization from the weights.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requires": {
+          "$ref": "#/$defs/Requirements",
+          "description": "Hardware this variant needs. Missing numbers mean \"unknown\" — the\nresolver does not filter on them (and warns)."
+        },
+        "size_gb": {
+          "description": "Download size in GB (10^9 bytes) — for ETAs and disk checks.",
+          "format": "double",
+          "minimum": 0.0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Source"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Weights for this variant; merged over the recipe `source` (see [`Source`])."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Verification": {
+      "additionalProperties": false,
+      "description": "A real run that proved a variant works.",
+      "properties": {
+        "backend_version": {
+          "description": "Engine and version, e.g. `vllm 0.10.1` or `llama.cpp b6234`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "by": {
+          "description": "Who ran it (handle or name).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "date": {
+          "description": "`YYYY-MM-DD`.",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "type": "string"
+        },
+        "hardware": {
+          "description": "Free text, e.g. `1x RTX 4090 24GB` or `Apple M3 Max 64GB`.",
+          "type": "string"
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variant": {
+          "description": "Variant name that was run.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "date",
+        "variant",
+        "hardware"
+      ],
+      "type": "object"
+    },
+    "VllmSettings": {
+      "additionalProperties": false,
+      "description": "vLLM-specific settings (`vllm serve` flags).",
+      "properties": {
+        "dtype": {
+          "description": "`--dtype`: `auto`, `bfloat16`, `float16`, `float32`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enable_prefix_caching": {
+          "description": "`--enable-prefix-caching` / `--no-enable-prefix-caching`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "enforce_eager": {
+          "description": "`--enforce-eager` (skip CUDA graphs; faster start, slower decode).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables for the engine process (e.g. `VLLM_USE_V1: \"1\"`).",
+          "type": "object"
+        },
+        "extra_args": {
+          "description": "Raw extra CLI arguments, appended last. Variant values append to recipe values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gpu_memory_utilization": {
+          "description": "`--gpu-memory-utilization`, `(0, 1]`.",
+          "format": "float",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "kv_cache_dtype": {
+          "description": "`--kv-cache-dtype`: `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_num_batched_tokens": {
+          "description": "`--max-num-batched-tokens`.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_version": {
+          "description": "Oldest vLLM release known to run this model, e.g. `0.10.1` (semver).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_impl": {
+          "description": "`--model-impl`: `auto` (default), `vllm`, or `transformers` to force the\nTransformers modeling backend (day-0 fallback for new architectures).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quantization": {
+          "description": "`--quantization`: force a method (`awq`, `gptq`, `fp8`, `compressed-tensors`,\n`bitsandbytes`, `gguf`). Rarely needed — vLLM reads `quantization_config`\nfrom `config.json`. Note `variants[].quantization` is the human label;\nthis is the engine override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokenizer": {
+          "description": "`--tokenizer`: use another repo's tokenizer.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trust_remote_code": {
+          "description": "`--trust-remote-code`. Executes Python from the model repo — set only\nwhen the architecture needs it.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/schemas/recipe-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One model, declaratively.",
+  "properties": {
+    "backend": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Backend"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Default backend, inherited by variants that do not set `backend`.\nIf neither is set it is inferred: GGUF sources → `llamacpp`, otherwise `vllm`."
+    },
+    "capabilities": {
+      "$ref": "#/$defs/Capabilities",
+      "description": "What the model can do. Drives API validation: tool definitions are only\naccepted when `tools` is true, image inputs only when `vision` is true.\nDefaults are all `false` — never claim what was not verified."
+    },
+    "chat": {
+      "$ref": "#/$defs/Chat",
+      "description": "How the model talks: chat template override, tool-call / reasoning parsers."
+    },
+    "context_length": {
+      "description": "The model's native maximum context length (from `config.json`\n`max_position_embeddings`). Informational and an upper bound for\n`engine.context_length`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "description": {
+      "description": "One or two sentences for humans (`omg model show`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "display_name": {
+      "description": "Human-readable name. Defaults to `id`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "engine": {
+      "$ref": "#/$defs/Engine",
+      "description": "Engine settings shared by all variants; each variant's `engine` is merged\non top (scalars override, `extra_args` append, `env` overlays)."
+    },
+    "family": {
+      "description": "Model family / architecture line, e.g. `qwen3`, `llama-3.1`, `gemma-3`.\nUsed for grouping and family-level defaults; free-form lowercase slug.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "generation_defaults": {
+      "$ref": "#/$defs/GenerationDefaults",
+      "description": "Sampling defaults recommended by the model authors, applied when a\nrequest omits the parameter."
+    },
+    "homepage": {
+      "description": "Model card or project page.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "Stable OhMyGPU model id: lowercase letters, digits, `.`, `_`, `-`;\nstarts alphanumeric. This is the `model` clients send to `/v1/*`.",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ModelKind",
+      "description": "What kind of model this is. v1 only knows `llm`; embedding / reranker\nkinds will be added without a schema bump."
+    },
+    "license": {
+      "description": "License identifier (SPDX where possible, e.g. `apache-2.0`, `llama3.1`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "description": "Free-form extension data for tooling. The only place unknown keys are\nallowed; the runtime ignores it.",
+      "type": "object"
+    },
+    "schema_version": {
+      "description": "Recipe schema version. Always `1` for this format; bumped only on\nbreaking changes (new optional fields do not bump it).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Source"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Default weights location, inherited by every variant that does not set\nits own `source`. A recipe without `variants` needs this."
+    },
+    "tags": {
+      "description": "Free-form tags for discovery (`reasoning`, `tools`, `coder`, `tiny`, …).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "tests": {
+      "description": "Smoke tests run after start (and by the nightly SLA matrix).",
+      "items": {
+        "$ref": "#/$defs/SmokeTest"
+      },
+      "type": "array"
+    },
+    "variants": {
+      "description": "Concrete ways to run this model, in order of preference. The resolver\nkeeps the variants the current hardware can run and picks the first.\nEmpty = one implicit variant named `default` built from `source`.",
+      "items": {
+        "$ref": "#/$defs/Variant"
+      },
+      "type": "array"
+    },
+    "verified": {
+      "description": "Provenance: real runs that proved a variant works on given hardware.",
+      "items": {
+        "$ref": "#/$defs/Verification"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id"
+  ],
+  "title": "OhMyGPU model recipe (schema v1)",
+  "type": "object"
+}

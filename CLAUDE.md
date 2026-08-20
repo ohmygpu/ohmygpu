@@ -15,6 +15,8 @@ The runtime is the product. The CLI (`ohmygpu`, alias `omg`), any future GUI, an
 
 Out of scope for v0.1 (do not add to the critical path): GUI/Tauri, chat app, image/audio/video, MCP, Ollama API, `/v1/completions`, response persistence, hosted tools, cloud. Deferred Candle/diffusion code lives in `archive/` (excluded from the workspace).
 
+**Direction after v0.1 (recorded 2026-08-20, see `docs/vision.md`):** OhMyGPU is meant to be a *base* you can drop onto any GPU box (rented VPS included), pull any open model — including one released today — and be serving it within 10 minutes. That implies: a vLLM backend behind the same `RuntimeBackend` trait, per-model recipes as data (YAML, spec in `docs/recipes.md`, types in `crates/core/src/recipe.rs`) instead of the static Rust catalog, multi-GPU hardware resolution, HF snapshot downloads, an authenticated remote mode, and a pre-baked CUDA image + installer. Local-first stays the default; remote mode must be opt-in and require an API key.
+
 ## Build & test
 
 ```bash
@@ -25,6 +27,7 @@ OHMYGPU_E2E=1 cargo test -p ohmygpu_daemon --test e2e_llamacpp -- --ignored --no
 cargo run --bin ohmygpu-runtime -- --port 10692 --data-dir /tmp/omg      # standalone daemon
 cargo run --bin ohmygpu -- serve              # same daemon via the CLI
 cargo run --bin ohmygpu -- model catalog | model pull <id> | run <id> | stop <id> | status | hardware
+make recipe-schema                            # regenerate schemas/recipe-v1.json after editing crates/core/src/recipe.rs
 ```
 
 llama.cpp is **not** linked; the runtime downloads the official release binary per platform on first model start (`backend.llamacpp.auto_install`), or uses `OHMYGPU_LLAMA_SERVER` / `backend.llamacpp.server_path`.
@@ -33,7 +36,8 @@ llama.cpp is **not** linked; the runtime downloads the official release binary p
 
 ```text
 crates/core/              ohmygpu_core        paths, config (+env), hardware detection, catalog + ModelRef parsing,
-                                              registry (registry.json), resumable downloader, lifecycle ModelState
+                                              registry (registry.json), resumable downloader, lifecycle ModelState,
+                                              recipe.rs (recipe schema v1: YAML/JSON loader, validation, JSON Schema)
 crates/inference/         ohmygpu_inference   InferenceRequest/Response, InputItem/OutputItem, ToolDefinition/ToolCall,
                                               GenerationOptions, StreamEvent, ResponseAccumulator, InferenceError
 crates/runtime_api/       ohmygpu_runtime_api RuntimeBackend { available, prepare, start } / ModelInstance { status, infer(_stream), wait, stop }
@@ -43,8 +47,12 @@ daemon/                   ohmygpu_daemon      manager.rs (ModelManager: lifecycl
                                               error.rs (OpenAI error envelope), server.rs (bind/graceful shutdown), main.rs (`ohmygpu-runtime` bin),
                                               testing.rs (MockBackend, `testing` feature), tests/api.rs, tests/e2e_llamacpp.rs
 cli/                      ohmygpu_cli         thin HTTP client of the Management API (`omg`)
+recipes/                  example per-model recipes (YAML; loaded by core tests) — see docs/recipes.md
+schemas/recipe-v1.json    generated JSON Schema for recipes (`make recipe-schema`; a test fails when stale)
 archive/                  deferred code, not built
 docs/architecture.md      assessment of the old code, backend decision, architecture
+docs/vision.md            the post-v0.1 direction (base for any GPU box, any model in 10 minutes)
+docs/recipes.md           recipe format spec: fields, merge rules, resolver contract, conventions
 ```
 
 ## Rules

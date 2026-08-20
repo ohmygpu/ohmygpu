@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=../schemas/recipe-v1.json
+#
+# Example recipe: a dense 32B model with several precisions across two backends.
+# Sizes / VRAM numbers are authoring estimates until the SLA matrix has measured
+# them — the `verified` block is only added by real runs.
+schema_version: 1
+id: qwen3-32b
+display_name: Qwen3 32B
+family: qwen3
+description: Dense 32B model with thinking mode and native tool calling.
+license: apache-2.0
+homepage: https://huggingface.co/Qwen/Qwen3-32B
+tags: [reasoning, tools]
+context_length: 40960            # native max_position_embeddings
+capabilities:
+  tools: true
+  reasoning: true
+
+source:
+  hf: Qwen/Qwen3-32B             # inherited by every variant that does not name its own repo
+
+chat:
+  tool_call_parser: hermes       # vLLM parser names; llama.cpp derives this from the Jinja template
+  reasoning_parser: qwen3
+
+generation_defaults:             # from the model card (thinking mode)
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+
+engine:                          # shared by all variants; variants merge on top
+  context_length: 32768
+  max_concurrency: 32
+  vllm:
+    min_version: "0.8.5"         # Qwen3 support landed here
+    enable_prefix_caching: true
+
+variants:                        # in order of preference; the resolver keeps what fits
+  - name: bf16
+    description: Full precision on one 80 GB card.
+    backend: vllm
+    quantization: bf16
+    size_gb: 65.5
+    requires:
+      vram_gb: 80
+      min_compute_capability: "8.0"     # quote it: 8.0 unquoted is the number 8
+    engine:
+      vllm:
+        gpu_memory_utilization: 0.92
+
+  - name: bf16-tp2
+    description: Full precision sharded over two 48 GB cards.
+    backend: vllm
+    quantization: bf16
+    size_gb: 65.5
+    requires: { vram_gb: 96, gpus: 2, min_compute_capability: "8.0" }
+    engine: { tensor_parallel: 2 }
+
+  - name: fp8
+    backend: vllm
+    source: { hf: Qwen/Qwen3-32B-FP8 }  # new repo → replaces the recipe source
+    quantization: fp8
+    size_gb: 34
+    requires: { vram_gb: 48, min_compute_capability: "8.9" }   # fp8 needs Ada/Hopper
+
+  - name: awq
+    backend: vllm
+    source: { hf: Qwen/Qwen3-32B-AWQ }
+    quantization: awq
+    size_gb: 19
+    requires: { vram_gb: 24, min_compute_capability: "7.5" }
+
+  - name: q4_k_m
+    description: GGUF for llama.cpp — Apple Silicon, CPU, or any CUDA GPU with ≥ 24 GB.
+    backend: llamacpp
+    source:
+      hf: unsloth/Qwen3-32B-GGUF
+      file: Qwen3-32B-Q4_K_M.gguf
+    quantization: q4_k_m
+    size_gb: 19.8
+    requires:
+      vram_gb: 24
+      ram_gb: 24
+    engine:
+      context_length: 16384
+      llamacpp:
+        flash_attention: true
+
+tests:
+  - name: ping
+    prompt: "Reply with exactly: pong"
+    expect_contains: pong
+  - name: tool-call
+    prompt: "What is the weather in Paris right now? Use the tool."
+    expect_tool_call: true

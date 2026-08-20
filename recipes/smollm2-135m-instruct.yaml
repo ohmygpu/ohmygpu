@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=../schemas/recipe-v1.json
+#
+# The minimal recipe: id + where the weights are. Backend (llamacpp) and format
+# (gguf) are inferred from the .gguf file; one implicit variant named `default`.
+schema_version: 1
+id: smollm2-135m-instruct
+display_name: SmolLM2 135M Instruct (tiny; smoke tests)
+family: smollm2
+source:
+  hf: bartowski/SmolLM2-135M-Instruct-GGUF
+  file: SmolLM2-135M-Instruct-Q8_0.gguf

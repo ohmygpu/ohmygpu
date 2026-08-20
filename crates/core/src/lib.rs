@@ -6,6 +6,7 @@
 //! * [`catalog`]   — the curated set of supported models + model reference parsing
 //! * [`registry`]  — installed models (`registry.json`)
 //! * [`download`]  — resumable HTTP downloads (Hugging Face)
+//! * [`recipe`]    — per-model recipes (schema v1): YAML/JSON loader, validation, JSON Schema
 //! * [`lifecycle`] — the explicit model state machine shared with clients
 //!
 //! Nothing in here spawns inference or knows about GPUs at build time.
@@ -16,6 +17,7 @@ pub mod download;
 pub mod hardware;
 pub mod lifecycle;
 pub mod paths;
+pub mod recipe;
 pub mod registry;
 
 pub use catalog::{CatalogEntry, ModelRef, CATALOG};
@@ -23,6 +25,7 @@ pub use config::Config;
 pub use hardware::HardwareInfo;
 pub use lifecycle::{DownloadProgress, ModelState};
 pub use paths::Paths;
+pub use recipe::{Recipe, RecipeError, ResolvedVariant};
 pub use registry::{InstalledModel, ModelCapabilities, ModelRegistry, ModelSource};
 
 /// Crate/product version, reported by the daemon and CLI.

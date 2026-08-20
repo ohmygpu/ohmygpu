@@ -1,4 +1,4 @@
-.PHONY: build test test-e2e check push version patch minor major alpha beta
+.PHONY: build test test-e2e check recipe-schema push version patch minor major alpha beta
 
 BUILD_DIR := ./target/release
 CARGO_TOML := ./Cargo.toml
@@ -23,6 +23,11 @@ test-e2e:
 check:
 	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets -- -D warnings
+
+# Regenerate schemas/recipe-v1.json from the Rust types in crates/core/src/recipe.rs
+# (a unit test fails when the checked-in file is stale).
+recipe-schema:
+	cargo test -p ohmygpu_core recipe::tests::regenerate_schema -- --ignored
 
 push:
 	git push origin main --tags
