@@ -38,27 +38,42 @@ Your app tells the runtime *ensure model exists → start model*, then uses the 
 
 Requires: macOS (Apple Silicon or Intel), Linux x86_64/arm64, or Windows x86_64. A GPU is used when present (Metal / Vulkan / CUDA); CPU works too.
 
-Prebuilt `ohmygpu-runtime` + `ohmygpu` binaries are on the [Releases page](https://github.com/ohmygpu/ohmygpu/releases); or build from source:
+**1. Get the binaries.** Each release ships one archive per platform with two files — `ohmygpu-runtime` (the runtime) and `ohmygpu` (the CLI, `omg`) — nothing else to install. Put them anywhere; a directory on your `PATH` is convenient. Models and llama.cpp go to `~/.config/ohmygpu`, not next to the binaries.
+
+| Platform | Latest release |
+|---|---|
+| macOS Apple Silicon | <https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-aarch64-apple-darwin.tar.gz> |
+| macOS Intel | <https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-x86_64-apple-darwin.tar.gz> |
+| Linux x86_64 | <https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-x86_64-unknown-linux-gnu.tar.gz> |
+| Linux arm64 | <https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-aarch64-unknown-linux-gnu.tar.gz> |
+| Windows x86_64 | <https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-x86_64-pc-windows-msvc.zip> |
 
 ```bash
-# build (no GPU toolchain needed — llama.cpp is fetched at runtime)
-make build            # → target/release/ohmygpu-runtime and target/release/ohmygpu
-alias omg=$PWD/target/release/ohmygpu
+# example: macOS Apple Silicon — pick T from the table for your platform
+T=aarch64-apple-darwin
+curl -LO https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-$T.tar.gz
+tar xzf ohmygpu-$T.tar.gz
+sudo install ohmygpu-$T/ohmygpu-runtime ohmygpu-$T/ohmygpu /usr/local/bin/   # or ~/.local/bin, or leave them in place
+alias omg=ohmygpu
 ```
 
-Start the runtime:
+A specific version lives at `releases/download/<tag>/<same file name>`; every release also carries `SHA256SUMS.txt` (`shasum -a 256 <file>`). The binaries are not code-signed yet: if macOS refuses one you downloaded with a browser, run `xattr -dr com.apple.quarantine <dir>` (curl downloads are not quarantined).
+
+Or build from source with a Rust toolchain (no GPU toolchain needed — llama.cpp is fetched at runtime): `make build` → `target/release/ohmygpu-runtime` and `target/release/ohmygpu`.
+
+**2. Start the runtime:**
 
 ```bash
 omg serve                      # or: ohmygpu-runtime --port 10692
 ```
 
-Download a model (see the curated catalog with `omg model catalog`):
+**3. Download a model** (see the curated catalog with `omg model catalog`):
 
 ```bash
 omg model pull qwen2.5-1.5b-instruct
 ```
 
-Start the model (first start also downloads the matching llama.cpp release for your platform):
+**4. Start the model** (first start also downloads the matching llama.cpp release for your platform):
 
 ```bash
 omg run qwen2.5-1.5b-instruct

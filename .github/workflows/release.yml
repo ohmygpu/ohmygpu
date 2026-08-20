@@ -57,7 +57,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          name="ohmygpu-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          # Version-less asset names so https://github.com/ohmygpu/ohmygpu/releases/latest/download/<name> always works.
+          name="ohmygpu-${{ matrix.target }}"
           ext=""
           case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
           mkdir -p "dist/$name"
