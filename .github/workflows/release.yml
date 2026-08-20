@@ -1,6 +1,9 @@
 # Build release binaries and publish a GitHub Release when a `v*` tag is pushed
 # (`make version patch|minor|major && make push`). `workflow_dispatch` only builds
 # and uploads artifacts — no release without a tag.
+#
+# Action majors are the Node 24 ones (checkout@v5, upload-artifact@v6, download-artifact@v7,
+# action-gh-release@v3, rust-cache@v2 ≥ 2.9); bump them together when GitHub moves runtimes again.
 name: release
 
 on:
@@ -19,7 +22,7 @@ jobs:
     name: test (ubuntu, mock backend)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked
@@ -41,7 +44,7 @@ jobs:
     # and Windows is not yet verified in CI. Their assets are simply missing from the release if they fail.
     continue-on-error: ${{ matrix.optional == true }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -68,7 +71,7 @@ jobs:
           esac
           rm -r "$name"
           ls -la
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           path: dist/*
@@ -80,16 +83,19 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
       - name: checksums
         run: |
           cd dist
+          # download-artifact may nest files per artifact; flatten so every asset sits in dist/
+          find . -mindepth 2 -type f -exec mv -t . {} +
+          find . -mindepth 1 -type d -empty -delete
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
