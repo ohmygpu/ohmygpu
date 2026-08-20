@@ -70,13 +70,13 @@ omg serve                      # or: ohmygpu-runtime --port 10692
 **3. Download a model** (see the curated catalog with `omg model catalog`):
 
 ```bash
-omg model pull qwen2.5-1.5b-instruct
+omg model pull qwen2.5-0.5b-instruct
 ```
 
 **4. Start the model** (first start also downloads the matching llama.cpp release for your platform):
 
 ```bash
-omg run qwen2.5-1.5b-instruct
+omg run qwen2.5-0.5b-instruct
 ```
 
 ### Modern API — `POST /v1/responses`
@@ -85,7 +85,7 @@ omg run qwen2.5-1.5b-instruct
 curl http://127.0.0.1:10692/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen2.5-1.5b-instruct",
+    "model": "qwen2.5-0.5b-instruct",
     "input": "Explain why the sky is blue."
   }'
 ```
@@ -96,7 +96,7 @@ curl http://127.0.0.1:10692/v1/responses \
 curl http://127.0.0.1:10692/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen2.5-1.5b-instruct",
+    "model": "qwen2.5-0.5b-instruct",
     "messages": [{"role": "user", "content": "Explain why the sky is blue."}]
   }'
 ```
@@ -109,10 +109,10 @@ Both endpoints reach the **same** local model through the **same** internal infe
 from openai import OpenAI
 client = OpenAI(base_url="http://127.0.0.1:10692/v1", api_key="not-needed")
 
-r = client.responses.create(model="qwen2.5-1.5b-instruct", input="Explain why the sky is blue.")
+r = client.responses.create(model="qwen2.5-0.5b-instruct", input="Explain why the sky is blue.")
 print(r.output_text)
 
-c = client.chat.completions.create(model="qwen2.5-1.5b-instruct",
+c = client.chat.completions.create(model="qwen2.5-0.5b-instruct",
                                    messages=[{"role": "user", "content": "Hello!"}], stream=True)
 for chunk in c:
     print(chunk.choices[0].delta.content or "", end="")
@@ -124,7 +124,7 @@ Verified against the official `openai` Python SDK (models list, Responses create
 
 ```text
 GET  /ohmygpu/v1/models/{id}          → state: not_installed | downloading | installed | starting | running | stopping | stopped | error
-POST /ohmygpu/v1/models/pull          {"model": "qwen2.5-1.5b-instruct"}       → 202, poll state/download progress
+POST /ohmygpu/v1/models/pull          {"model": "qwen2.5-0.5b-instruct"}       → 202, poll state/download progress
 POST /ohmygpu/v1/models/{id}/start?wait=true                                   → 200 running (or 502 with the reason)
 POST /v1/responses  /  POST /v1/chat/completions                              → inference
 POST /ohmygpu/v1/models/{id}/stop
