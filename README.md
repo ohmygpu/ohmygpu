@@ -144,25 +144,27 @@ Only what is listed here is implemented. Unknown fields are ignored; unsupported
 | Supported | Notes |
 |-----------|-------|
 | `model`, `input` | `input` is a string or an array of items: `message` (roles `user`/`assistant`/`system`/`developer`, string or `input_text`/`output_text` parts), `function_call`, `function_call_output` |
+| `input_image` parts (user messages) | **vision models only** — `image_url` is a `data:image/…;base64,…` URL or an http(s) URL (the runtime fetches it; png/jpeg/gif/webp/bmp, ≤ 20 MB). Other models answer `400 unsupported` |
 | `instructions` | becomes the system message |
 | `tools` (`type: "function"`), `tool_choice` (`auto` / `none` / `required` / `{"type":"function","name":…}`) | tool calls are returned as `function_call` output items; **your application executes them** |
 | `temperature`, `top_p`, `max_output_tokens`, `metadata` | |
 | `stream: true` | Responses-style SSE: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta/.done`, `response.content_part.done`, `response.function_call_arguments.delta/.done`, `response.output_item.done`, `response.completed` / `response.incomplete` / `response.failed`, `error` |
 | Response object | `id`, `object: "response"`, `status` (`completed` / `incomplete` / `failed`), `output` (`message` with `output_text`, `function_call`), `usage`, `incomplete_details`, `error`, echoed request fields; `store` is always `false` |
 
-Not supported (400): `previous_response_id`, `background`, hosted tools (web search, file search, code interpreter, computer use), image/file inputs, non-text `text.format`. Not implemented: `GET/DELETE /v1/responses/{id}`, `/cancel`, `/compact`, conversations, response storage.
+Not supported (400): `previous_response_id`, `background`, hosted tools (web search, file search, code interpreter, computer use), file inputs (`file_id`), non-text `text.format`. Not implemented: `GET/DELETE /v1/responses/{id}`, `/cancel`, `/compact`, conversations, response storage.
 
 **`POST /v1/chat/completions`**
 
 | Supported | Notes |
 |-----------|-------|
 | `model`, `messages` | roles `system` / `developer` / `user` / `assistant` (with `tool_calls`) / `tool`; content as string or text parts |
+| `image_url` parts (user messages) | **vision models only** — `{"type":"image_url","image_url":{"url": "data:image/png;base64,…" \| "https://…"}}`; same rules as above |
 | `tools` (`function`), `tool_choice` | |
 | `temperature`, `top_p`, `max_tokens` / `max_completion_tokens`, `stop`, `seed`, `presence_penalty`, `frequency_penalty` | |
 | `stream`, `stream_options.include_usage` | standard `chat.completion.chunk` SSE, `data: [DONE]` terminator |
 | Response object | `id`, `object: "chat.completion"`, `choices[0].message` (`content`, `tool_calls`), `finish_reason` (`stop` / `length` / `tool_calls`), `usage` |
 
-Not supported (400): `n > 1`, image/audio content parts, non-text `response_format`. Ignored: `logprobs`, `user`, `parallel_tool_calls`.
+Not supported (400): `n > 1`, audio content parts, non-text `response_format`. Ignored: `logprobs`, `user`, `parallel_tool_calls`, `image_url.detail`.
 
 **`GET /v1/models`**, **`GET /v1/models/{id}`** — installed models, OpenAI list shape (`created` = install time, extra `state` field).
 
@@ -195,7 +197,7 @@ By default a request for a stopped model is a `409`; set `inference.auto_start =
 | `GET  /ohmygpu/v1/catalog` | curated supported models with `installed`/`state` |
 | `GET  /ohmygpu/v1/models[?installed=true]` | all known models with lifecycle state |
 | `GET  /ohmygpu/v1/models/{id}` | one model: `state`, `download` progress, `message` (while starting), `error`, `runtime` (backend, pid, port) |
-| `POST /ohmygpu/v1/models/pull` `{"model": "<catalog id \| hf:owner/repo/file.gguf \| https://…/file.gguf>", "id"?: "…"}` | 202 downloading (idempotent) |
+| `POST /ohmygpu/v1/models/pull` `{"model": "<catalog id \| hf:owner/repo/file.gguf \| https://…/file.gguf>", "id"?: "…", "mmproj"?: "<projector .gguf in the same repo, or URL>"}` | 202 downloading (idempotent); `mmproj` turns a non-catalog model into a vision model (can be added to an installed model later) |
 | `DELETE /ohmygpu/v1/models/{id}` | stop if needed, delete files, forget |
 | `POST /ohmygpu/v1/models/{id}/start[?wait=true&timeout=600]` `{"context_length"?, "gpu_layers"?, "threads"?}` | 202 starting, or with `wait` 200 running / 502 error |
 | `POST /ohmygpu/v1/models/{id}/stop` | 200 stopped |
@@ -213,7 +215,21 @@ not_installed ─pull─▶ downloading ─▶ installed ─start─▶ starting
 
 ## Supported models
 
-The runtime ships a small, verified catalog of single-file GGUF instruct models (Qwen2.5 0.5B–7B, Qwen3 4B, Llama 3.2 1B/3B, Llama 3.1 8B, Phi-4 mini, Gemma 3 1B–12B, SmolLM2 135M). `omg model catalog` lists them with sizes and whether native tool calling is supported. Any other GGUF can be pulled with `hf:owner/repo/file.gguf` or a direct URL, unsupported but usually fine.
+The runtime ships a small, verified catalog of GGUF instruct models (Qwen2.5 0.5B–7B, Qwen3 4B, Llama 3.2 1B/3B, Llama 3.1 8B, Phi-4 mini, Gemma 3 1B–12B, SmolLM2 135M) plus **vision models** that accept images (Qwen2.5-VL 3B/7B, Gemma 3 4B, SmolVLM 256M) — those download a second file, the multimodal projector. `omg model catalog` lists them with sizes, tool calling and vision support. Any other GGUF can be pulled with `hf:owner/repo/file.gguf` or a direct URL (add `--mmproj <file>` for a vision model), unsupported but usually fine.
+
+Vision, in practice:
+
+```bash
+omg model pull qwen2.5-vl-3b-instruct && omg run qwen2.5-vl-3b-instruct
+curl http://127.0.0.1:10692/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "qwen2.5-vl-3b-instruct",
+  "messages": [{"role": "user", "content": [
+    {"type": "text", "text": "Read all the text in this image."},
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64,<BASE64>"}}
+  ]}]}'
+```
+
+Text, tool calls and images all go through the same pipeline; images are only inlined (base64) by the time they reach llama.cpp — the runtime fetches http(s) URLs itself and never lets the backend fetch anything.
 
 ## CLI
 
@@ -221,7 +237,7 @@ The runtime ships a small, verified catalog of single-file GGUF instruct models 
 omg serve [--host H] [--port P]        run the runtime in the foreground
 omg status                              runtime + backend + models summary
 omg hardware                            detected hardware
-omg model list | catalog | pull <ref> [--id X] | rm <id> | info <id>
+omg model list | catalog | pull <ref> [--id X] [--mmproj FILE] | rm <id> | info <id>
 omg run <id> [--context-length N] [--gpu-layers N] [--threads N]
 omg stop <id>
 omg shutdown

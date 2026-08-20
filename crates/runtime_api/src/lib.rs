@@ -43,6 +43,9 @@ pub struct StartSpec {
     pub model_id: String,
     /// Path to the model file (GGUF for llama.cpp).
     pub model_path: PathBuf,
+    /// Multimodal projector (vision) that belongs to this model, if it can see.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj_path: Option<PathBuf>,
     /// Context window to allocate. `None` = backend default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_length: Option<u32>,

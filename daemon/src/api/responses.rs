@@ -22,12 +22,13 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::{Stream, StreamExt};
 use ohmygpu_inference::{
-    FinishReason, GenerationOptions, InferenceRequest, InferenceResponse, InputItem, OutputItem,
-    Role, StreamEvent, ToolCall, ToolChoice, ToolDefinition, Usage,
+    ContentPart, FinishReason, GenerationOptions, InferenceRequest, InferenceResponse, InputItem,
+    OutputItem, Role, StreamEvent, ToolCall, ToolChoice, ToolDefinition, Usage,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::api::images;
 use crate::api::{new_id, now_secs, ApiJson};
 use crate::error::ApiError;
 use crate::state::SharedState;
@@ -82,17 +83,51 @@ pub struct Echo {
     pub parallel_tool_calls: bool,
 }
 
-fn text_from_content(content: &Value, what: &str) -> Result<String, ApiError> {
+/// Append text, merging with a preceding text part.
+fn push_text(out: &mut Vec<ContentPart>, text: &str) {
+    if let Some(ContentPart::Text { text: last }) = out.last_mut() {
+        last.push_str(text);
+    } else {
+        out.push(ContentPart::text(text));
+    }
+}
+
+/// Message content → parts. `input_text`/`output_text`/`text` become text,
+/// `input_image` (an `image_url` string: `data:` or http(s)) becomes an image.
+fn parts_from_content(content: &Value, what: &str) -> Result<Vec<ContentPart>, ApiError> {
     match content {
-        Value::Null => Ok(String::new()),
-        Value::String(s) => Ok(s.clone()),
+        Value::Null => Ok(Vec::new()),
+        Value::String(s) => Ok(vec![ContentPart::text(s.clone())]),
         Value::Array(parts) => {
-            let mut out = String::new();
+            let mut out = Vec::with_capacity(parts.len());
             for p in parts {
                 let kind = p.get("type").and_then(|t| t.as_str()).unwrap_or("");
                 match kind {
-                    "input_text" | "output_text" | "text" => {
-                        out.push_str(p.get("text").and_then(|t| t.as_str()).unwrap_or(""))
+                    "input_text" | "output_text" | "text" => push_text(
+                        &mut out,
+                        p.get("text").and_then(|t| t.as_str()).unwrap_or(""),
+                    ),
+                    "input_image" => {
+                        if p.get("file_id").map(|v| !v.is_null()).unwrap_or(false) {
+                            return Err(ApiError::unsupported(
+                                "input_image.file_id (there is no file store); send image_url",
+                            )
+                            .with_param("input"));
+                        }
+                        let url = match p.get("image_url") {
+                            Some(Value::String(u)) => u.clone(),
+                            Some(Value::Object(o)) => o
+                                .get("url")
+                                .and_then(|u| u.as_str())
+                                .map(str::to_string)
+                                .unwrap_or_default(),
+                            _ => String::new(),
+                        };
+                        if url.is_empty() {
+                            return Err(ApiError::invalid("input_image requires `image_url`")
+                                .with_param("input"));
+                        }
+                        out.push(ContentPart::image(url));
                     }
                     other => {
                         return Err(ApiError::unsupported(format!(
@@ -105,10 +140,28 @@ fn text_from_content(content: &Value, what: &str) -> Result<String, ApiError> {
             Ok(out)
         }
         _ => Err(ApiError::invalid(format!(
-            "{what} content must be a string or an array of text parts"
+            "{what} content must be a string or an array of content parts"
         ))
         .with_param("input")),
     }
+}
+
+/// Text-only content (tool outputs): images are not allowed here.
+fn text_from_content(content: &Value, what: &str) -> Result<String, ApiError> {
+    let parts = parts_from_content(content, what)?;
+    let mut out = String::new();
+    for p in parts {
+        match p {
+            ContentPart::Text { text } => out.push_str(&text),
+            ContentPart::Image { .. } => {
+                return Err(
+                    ApiError::invalid(format!("images are not allowed in {what}"))
+                        .with_param("input"),
+                )
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn parse_role(role: &str) -> Result<Role, ApiError> {
@@ -139,10 +192,16 @@ fn parse_input_items(input: Option<Value>) -> Result<Vec<InputItem>, ApiError> {
                 match (kind, role) {
                     (Some("message"), Some(role)) | (None, Some(role)) => {
                         let role = parse_role(role)?;
-                        let content = text_from_content(
+                        let content = parts_from_content(
                             obj.get("content").unwrap_or(&Value::Null),
                             "message",
                         )?;
+                        if role != Role::User && content.iter().any(ContentPart::is_image) {
+                            return Err(ApiError::invalid(
+                                "images are only supported in user messages",
+                            )
+                            .with_param("input"));
+                        }
                         items.push(InputItem::Message { role, content });
                     }
                     (Some("function_call"), _) => {
@@ -464,8 +523,16 @@ pub async fn create(
     ApiJson(req): ApiJson<ResponsesRequest>,
 ) -> Result<Response, ApiError> {
     let stream = req.stream.unwrap_or(false);
-    let (ireq, echo) = to_inference_request(req)?;
+    let (mut ireq, echo) = to_inference_request(req)?;
     let instance = state.manager.instance_for(&ireq.model).await?;
+    if ireq.has_images() {
+        images::require_vision(
+            state.manager.capabilities_of(&ireq.model),
+            &ireq.model,
+            "input",
+        )?;
+        images::resolve_images(&mut ireq, &state.http, "input").await?;
+    }
     let id = new_id("resp_");
     let created_at = now_secs();
 

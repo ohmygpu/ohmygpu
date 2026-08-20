@@ -21,12 +21,13 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::{Stream, StreamExt};
 use ohmygpu_inference::{
-    FinishReason, GenerationOptions, InferenceRequest, InferenceResponse, InputItem, OutputItem,
-    Role, StreamEvent, ToolCall, ToolChoice, ToolDefinition, Usage,
+    ContentPart, FinishReason, GenerationOptions, InferenceRequest, InferenceResponse, InputItem,
+    OutputItem, Role, StreamEvent, ToolCall, ToolChoice, ToolDefinition, Usage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::api::images;
 use crate::api::{new_id, now_secs, ApiJson};
 use crate::error::ApiError;
 use crate::state::SharedState;
@@ -98,15 +99,18 @@ pub struct ChatMessage {
 #[serde(untagged)]
 pub enum Content {
     Text(String),
-    Parts(Vec<ContentPart>),
+    Parts(Vec<ContentPartSpec>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ContentPart {
+pub struct ContentPartSpec {
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
     pub text: Option<String>,
+    /// `{"url": "...", "detail": ...}` per the spec; a bare string is accepted too.
+    #[serde(default)]
+    pub image_url: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -142,17 +146,56 @@ pub struct FunctionSpec {
     pub parameters: Option<Value>,
 }
 
-/// Flatten OpenAI content (string or text parts) into one string.
-fn content_text(content: Option<Content>, role: &str) -> Result<String, ApiError> {
+/// Append text, merging with a preceding text part (adjacent text parts are
+/// one piece of text as far as the model is concerned).
+fn push_text(out: &mut Vec<ContentPart>, text: &str) {
+    if let Some(ContentPart::Text { text: last }) = out.last_mut() {
+        last.push_str(text);
+    } else {
+        out.push(ContentPart::text(text));
+    }
+}
+
+/// OpenAI content (string or parts) → internal parts. Images (`image_url`)
+/// are only accepted in user messages.
+fn content_parts(content: Option<Content>, role: &str) -> Result<Vec<ContentPart>, ApiError> {
     match content {
-        None => Ok(String::new()),
-        Some(Content::Text(t)) => Ok(t),
+        None => Ok(Vec::new()),
+        Some(Content::Text(t)) => Ok(vec![ContentPart::text(t)]),
         Some(Content::Parts(parts)) => {
-            let mut out = String::new();
+            let mut out = Vec::with_capacity(parts.len());
             for p in parts {
                 match p.kind.as_str() {
                     "text" | "input_text" | "output_text" => {
-                        out.push_str(p.text.as_deref().unwrap_or(""))
+                        push_text(&mut out, p.text.as_deref().unwrap_or(""))
+                    }
+                    "image_url" => {
+                        if role != "user" {
+                            return Err(ApiError::invalid(
+                                "images are only supported in user messages",
+                            )
+                            .with_param("messages"));
+                        }
+                        let url = match p.image_url {
+                            Some(Value::String(u)) => u,
+                            Some(Value::Object(o)) => o
+                                .get("url")
+                                .and_then(|u| u.as_str())
+                                .map(str::to_string)
+                                .unwrap_or_default(),
+                            _ => String::new(),
+                        };
+                        if url.is_empty() {
+                            return Err(ApiError::invalid(
+                                "image_url parts require `image_url.url`",
+                            )
+                            .with_param("messages"));
+                        }
+                        out.push(ContentPart::image(url));
+                    }
+                    "input_audio" => {
+                        return Err(ApiError::unsupported("audio input (input_audio)")
+                            .with_param("messages"))
                     }
                     other => {
                         return Err(ApiError::unsupported(format!(
@@ -165,6 +208,17 @@ fn content_text(content: Option<Content>, role: &str) -> Result<String, ApiError
             Ok(out)
         }
     }
+}
+
+/// Text-only roles: flatten to one string; images here are an error.
+fn content_text(content: Option<Content>, role: &str) -> Result<String, ApiError> {
+    let mut out = String::new();
+    for p in content_parts(content, role)? {
+        if let ContentPart::Text { text } = p {
+            out.push_str(&text);
+        }
+    }
+    Ok(out)
 }
 
 /// Arguments may arrive as a JSON string (spec) or an object (lenient clients).
@@ -202,21 +256,17 @@ pub fn to_inference_request(req: ChatCompletionRequest) -> Result<InferenceReque
     let mut input = Vec::with_capacity(req.messages.len());
     for m in req.messages {
         match m.role.as_str() {
-            "system" | "developer" => input.push(InputItem::Message {
-                role: Role::System,
-                content: content_text(m.content, "system")?,
-            }),
+            "system" | "developer" => {
+                input.push(InputItem::system(content_text(m.content, "system")?))
+            }
             "user" => input.push(InputItem::Message {
                 role: Role::User,
-                content: content_text(m.content, "user")?,
+                content: content_parts(m.content, "user")?,
             }),
             "assistant" => {
                 let text = content_text(m.content, "assistant")?;
                 if !text.is_empty() {
-                    input.push(InputItem::Message {
-                        role: Role::Assistant,
-                        content: text,
-                    });
+                    input.push(InputItem::assistant(text));
                 }
                 for tc in m.tool_calls.unwrap_or_default() {
                     input.push(InputItem::ToolCall(ToolCall {
@@ -440,8 +490,16 @@ pub async fn create(
         .as_ref()
         .map(|o| o.include_usage)
         .unwrap_or(false);
-    let ireq = to_inference_request(req)?;
+    let mut ireq = to_inference_request(req)?;
     let instance = state.manager.instance_for(&ireq.model).await?;
+    if ireq.has_images() {
+        images::require_vision(
+            state.manager.capabilities_of(&ireq.model),
+            &ireq.model,
+            "messages",
+        )?;
+        images::resolve_images(&mut ireq, &state.http, "messages").await?;
+    }
     let id = new_id("chatcmpl-");
     let created = now_secs();
 
@@ -598,8 +656,15 @@ mod tests {
         .unwrap_err();
         assert_eq!(e.status, axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(e.body.code, "unsupported");
-        let e = to_inference_request(parse(json!({"model": "m", "messages": [{"role":"user","content":[{"type":"image_url","image_url":{"url":"x"}}]}]}))).unwrap_err();
+        let e = to_inference_request(parse(json!({"model": "m", "messages": [{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"x","format":"wav"}}]}]}))).unwrap_err();
         assert_eq!(e.body.code, "unsupported");
+        // images parse into image parts (the vision gate runs later, in the handler)
+        let r = to_inference_request(parse(json!({"model": "m", "messages": [{"role":"user","content":[{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]}))).unwrap();
+        assert_eq!(r.input[0].image_count(), 1);
+        assert_eq!(r.input[0].text().as_deref(), Some("what is this?"));
+        // …but only in user messages
+        let e = to_inference_request(parse(json!({"model": "m", "messages": [{"role":"system","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]}))).unwrap_err();
+        assert_eq!(e.body.code, "invalid_request");
         let e = to_inference_request(parse(json!({"model": "m", "messages": [{"role":"user","content":"x"}], "response_format": {"type":"json_object"}}))).unwrap_err();
         assert_eq!(e.body.code, "unsupported");
         let e = to_inference_request(parse(json!({"model": "m", "messages": []}))).unwrap_err();

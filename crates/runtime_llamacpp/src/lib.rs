@@ -24,7 +24,9 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use ohmygpu_core::config::LlamaCppConfig;
 use ohmygpu_core::hardware::HardwareInfo;
-use ohmygpu_inference::{InferenceError, InferenceRequest, InferenceStream};
+use ohmygpu_inference::{
+    ContentPart, InferenceError, InferenceRequest, InferenceStream, InputItem,
+};
 use ohmygpu_runtime_api::{
     BackendAvailability, InstanceInfo, InstanceStatus, ModelInstance, ProgressFn, RuntimeBackend,
     RuntimeError, StartSpec,
@@ -269,6 +271,20 @@ impl ModelInstance for LlamaCppInstance {
     ) -> Result<InferenceStream, InferenceError> {
         if let Some(InstanceStatus::Exited { message, .. }) = self.proc.has_exited() {
             return Err(InferenceError::Unavailable(message));
+        }
+        // Remote images are inlined by the daemon; never let llama-server fetch URLs.
+        for item in &request.input {
+            if let InputItem::Message { content, .. } = item {
+                for part in content {
+                    if let ContentPart::Image { url } = part {
+                        if !url.starts_with("data:") {
+                            return Err(InferenceError::InvalidRequest(
+                                "image URLs must be inlined as data: URLs before inference".into(),
+                            ));
+                        }
+                    }
+                }
+            }
         }
         let body = wire::build_request(&request);
         let url = format!("{}/v1/chat/completions", self.base_url());

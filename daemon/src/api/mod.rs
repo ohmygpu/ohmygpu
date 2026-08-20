@@ -6,6 +6,7 @@
 //! ```
 
 pub mod chat_completions;
+pub mod images;
 pub mod management;
 pub mod models;
 pub mod responses;

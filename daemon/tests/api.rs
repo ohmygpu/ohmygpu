@@ -46,19 +46,60 @@ fn install_fake_model(paths: &Paths, id: &str) {
         },
         format: "gguf".into(),
         path: file,
+        mmproj_path: None,
         size_bytes: 15,
         installed_at: chrono::Utc::now(),
-        capabilities: ModelCapabilities { tools: true },
+        capabilities: ModelCapabilities {
+            tools: true,
+            vision: false,
+        },
+        curated: false,
+    })
+    .unwrap();
+}
+
+/// A fake *vision* model: weights + projector, `capabilities.vision = true`.
+fn install_fake_vision_model(paths: &Paths, id: &str) {
+    let dir = paths.model_dir(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(format!("{id}.gguf"));
+    let mmproj = dir.join("mmproj.gguf");
+    std::fs::write(&file, b"GGUF-not-really").unwrap();
+    std::fs::write(&mmproj, b"GGUF-proj").unwrap();
+    let mut reg = ModelRegistry::load(paths.registry_path()).unwrap();
+    reg.add(InstalledModel {
+        id: id.into(),
+        display_name: "Mock Vision Model".into(),
+        source: ModelSource::HuggingFace {
+            repo: "mock/vision".into(),
+            file: format!("{id}.gguf"),
+        },
+        format: "gguf".into(),
+        path: file,
+        mmproj_path: Some(mmproj),
+        size_bytes: 24,
+        installed_at: chrono::Utc::now(),
+        capabilities: ModelCapabilities {
+            tools: false,
+            vision: true,
+        },
         curated: false,
     })
     .unwrap();
 }
 
 async fn setup_with(config: Config) -> TestApp {
+    setup_full(config, |_| {}).await
+}
+
+/// Like `setup_with`, with a hook to install more fake models before the
+/// manager loads the registry.
+async fn setup_full(config: Config, extra: impl FnOnce(&Paths)) -> TestApp {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::new(dir.path());
     paths.ensure_dirs().unwrap();
     install_fake_model(&paths, MODEL);
+    extra(&paths);
     let backend = MockBackend::new();
     let (state, shutdown_rx) = build_state(
         paths,
@@ -903,4 +944,293 @@ async fn shutdown_endpoint_signals_the_server() {
     assert_eq!(s, StatusCode::ACCEPTED);
     assert_eq!(v["status"], "shutting_down");
     assert!(*t.shutdown_rx.borrow());
+}
+
+// ---------------------------------------------------------------------------
+// Vision (image input)
+// ---------------------------------------------------------------------------
+
+const VISION_MODEL: &str = "mock-vision";
+/// 64×64 solid red PNG (132 bytes).
+const RED_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAS0lEQVR42u3PQQkAAAgAsetfWiP4FgYrsKZeS0BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEDgsqnc8OJg6Ln3AAAAAElFTkSuQmCC";
+
+fn red_png_data_url() -> String {
+    format!("data:image/png;base64,{RED_PNG_B64}")
+}
+
+#[tokio::test]
+async fn images_need_a_vision_model() {
+    let t = setup().await;
+    t.start_and_wait().await;
+    let (s, v) = t
+        .json(
+            "POST",
+            "/v1/chat/completions",
+            Some(
+                json!({"model": MODEL, "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": "what is this?"},
+                    {"type": "image_url", "image_url": {"url": red_png_data_url()}}
+                ]}]}),
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error"]["code"], "unsupported");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("vision"),
+        "{v}"
+    );
+    assert_eq!(v["error"]["param"], "messages");
+
+    let (s, v) = t
+        .json(
+            "POST",
+            "/v1/responses",
+            Some(
+                json!({"model": MODEL, "input": [{"role": "user", "content": [
+                    {"type": "input_image", "image_url": red_png_data_url()}
+                ]}]}),
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error"]["code"], "unsupported");
+    assert_eq!(v["error"]["param"], "input");
+}
+
+#[tokio::test]
+async fn vision_model_accepts_inline_and_remote_images() {
+    let t = setup_full(Config::default(), |p| {
+        install_fake_vision_model(p, VISION_MODEL)
+    })
+    .await;
+    let (s, v) = t
+        .json(
+            "POST",
+            &format!("/ohmygpu/v1/models/{VISION_MODEL}/start?wait=true"),
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["model"]["capabilities"]["vision"], true);
+    assert!(t.backend.last_instance().unwrap().spec_mmproj.is_some());
+
+    // Inline data: URL, chat completions shape.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/v1/chat/completions",
+            Some(
+                json!({"model": VISION_MODEL, "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": "what is this?"},
+                    {"type": "image_url", "image_url": {"url": red_png_data_url()}}
+                ]}]}),
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["choices"][0]["message"]["content"],
+        "saw 1 image(s); echo: what is this?"
+    );
+
+    // Remote image: served locally, fetched and inlined by the daemon.
+    use base64::Engine;
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(RED_PNG_B64)
+        .unwrap();
+    let file_app = Router::new()
+        .route(
+            "/red.png",
+            axum::routing::get({
+                let png = png.clone();
+                move || async move { ([("content-type", "image/png")], png) }
+            }),
+        )
+        .route("/note.txt", axum::routing::get(|| async { "hello" }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, file_app).await.unwrap() });
+
+    let (s, v) = t
+        .json(
+            "POST",
+            "/v1/responses",
+            Some(json!({"model": VISION_MODEL, "input": [{"role": "user", "content": [
+                {"type": "input_text", "text": "describe"},
+                {"type": "input_image", "image_url": format!("http://{addr}/red.png"), "detail": "auto"}
+            ]}]})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["output"][0]["content"][0]["text"],
+        "saw 1 image(s); echo: describe"
+    );
+
+    // A remote URL that is not an image.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/v1/responses",
+            Some(
+                json!({"model": VISION_MODEL, "input": [{"role": "user", "content": [
+                    {"type": "input_image", "image_url": format!("http://{addr}/note.txt")}
+                ]}]}),
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error"]["code"], "invalid_request");
+
+    // Wrong media type inline.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/v1/chat/completions",
+            Some(
+                json!({"model": VISION_MODEL, "messages": [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": "data:text/plain;base64,aGk="}}
+                ]}]}),
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error"]["code"], "unsupported");
+
+    // Images only in user messages.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({"model": VISION_MODEL, "messages": [
+                {"role": "system", "content": [{"type": "image_url", "image_url": {"url": red_png_data_url()}}]},
+                {"role": "user", "content": "hi"}
+            ]})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error"]["code"], "invalid_request");
+}
+
+#[tokio::test]
+async fn pull_with_mmproj_downloads_both_files_and_adds_vision() {
+    let t = setup().await;
+    let weights = vec![7u8; 300_000];
+    let proj = vec![9u8; 50_000];
+    let file_app = Router::new()
+        .route(
+            "/m.gguf",
+            axum::routing::get({
+                let w = weights.clone();
+                move || async move { w }
+            }),
+        )
+        .route(
+            "/mmproj.gguf",
+            axum::routing::get({
+                let p = proj.clone();
+                move || async move { p }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, file_app).await.unwrap() });
+    let url_m = format!("http://{addr}/m.gguf");
+    let url_p = format!("http://{addr}/mmproj.gguf");
+
+    // 1. Plain pull: text-only model.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/ohmygpu/v1/models/pull",
+            Some(json!({"model": url_m, "id": "eyes"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    t.state
+        .manager
+        .wait_for("eyes", Duration::from_secs(10), |s| {
+            !matches!(s, ModelState::Downloading { .. })
+        })
+        .await
+        .unwrap();
+    let (_, v) = t.json("GET", "/ohmygpu/v1/models/eyes", None).await;
+    assert_eq!(v["state"], "installed");
+    assert_eq!(v["capabilities"]["vision"], false);
+    assert_eq!(v["size_bytes"], 300_000);
+
+    // 2. Pull again with a projector: only the projector is downloaded,
+    //    the model becomes a vision model.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/ohmygpu/v1/models/pull",
+            Some(json!({"model": url_m, "id": "eyes", "mmproj": url_p})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    assert_eq!(v["model"]["state"], "downloading");
+    assert_eq!(v["model"]["capabilities"]["vision"], true);
+    let st = t
+        .state
+        .manager
+        .wait_for("eyes", Duration::from_secs(10), |s| {
+            !matches!(s, ModelState::Downloading { .. })
+        })
+        .await
+        .unwrap();
+    assert_eq!(st, Some(ModelState::Installed));
+    let (_, v) = t.json("GET", "/ohmygpu/v1/models/eyes", None).await;
+    assert_eq!(v["capabilities"]["vision"], true);
+    assert_eq!(v["size_bytes"], 350_000);
+    assert!(t.state.paths.model_dir("eyes").join("m.gguf").exists());
+    assert!(t.state.paths.model_dir("eyes").join("mmproj.gguf").exists());
+    let reg = ModelRegistry::load(t.state.paths.registry_path()).unwrap();
+    assert!(reg.get("eyes").unwrap().mmproj_path.is_some());
+
+    // 3. Pulling once more is a no-op.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/ohmygpu/v1/models/pull",
+            Some(json!({"model": url_m, "id": "eyes", "mmproj": url_p})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["model"]["state"], "installed");
+
+    // 4. Start hands the projector to the backend, and images now work.
+    let (s, v) = t
+        .json("POST", "/ohmygpu/v1/models/eyes/start?wait=true", None)
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(t.backend.last_instance().unwrap().spec_mmproj.is_some());
+    let (s, v) = t
+        .json(
+            "POST",
+            "/v1/responses",
+            Some(
+                json!({"model": "eyes", "input": [{"role": "user", "content": [
+                    {"type": "input_text", "text": "colour?"},
+                    {"type": "input_image", "image_url": red_png_data_url()}
+                ]}]}),
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["output"][0]["content"][0]["text"],
+        "saw 1 image(s); echo: colour?"
+    );
+
+    // A bad projector reference is rejected up front.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/ohmygpu/v1/models/pull",
+            Some(json!({"model": url_m, "id": "eyes2", "mmproj": "not-a-gguf.bin"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
 }

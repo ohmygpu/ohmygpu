@@ -1,8 +1,8 @@
 //! The curated model catalog and model-reference parsing.
 //!
-//! v0.1 deliberately supports a *small, reliable* set of models: single-file GGUF
-//! instruct models from ungated Hugging Face repositories, all verified to load
-//! in llama.cpp. Power users can still pull any GGUF with an explicit reference
+//! The curated catalog is a *small, reliable* set of models: single-file GGUF
+//! instruct models from ungated Hugging Face repositories (vision models add one
+//! projector file), all verified to load in llama.cpp. Power users can still pull any GGUF with an explicit reference
 //! (`hf:owner/repo/file.gguf`), but that path is "advanced" and unsupported.
 
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,11 @@ pub struct CatalogEntry {
     pub size_bytes_approx: u64,
     /// llama.cpp has a native tool-call parser for this model family.
     pub tools: bool,
+    /// Multimodal projector GGUF in the same repository — present for vision
+    /// models (image input); downloaded and stored next to `file`.
+    pub mmproj_file: Option<&'static str>,
+    /// Approximate projector size (0 when there is none).
+    pub mmproj_size_bytes_approx: u64,
 }
 
 const MB: u64 = 1_000_000;
@@ -41,6 +46,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q8_0",
         size_bytes_approx: 145 * MB,
         tools: false,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "qwen2.5-0.5b-instruct",
@@ -51,6 +58,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 491 * MB,
         tools: true,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "qwen2.5-1.5b-instruct",
@@ -61,6 +70,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 1_120 * MB,
         tools: true,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "qwen2.5-3b-instruct",
@@ -71,6 +82,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 2_100 * MB,
         tools: true,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "qwen2.5-7b-instruct",
@@ -81,6 +94,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 4_680 * MB,
         tools: true,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "qwen3-4b-instruct",
@@ -91,6 +106,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 2_500 * MB,
         tools: true,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "llama-3.2-1b-instruct",
@@ -101,6 +118,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 810 * MB,
         tools: true,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "llama-3.2-3b-instruct",
@@ -111,6 +130,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 2_020 * MB,
         tools: true,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "llama-3.1-8b-instruct",
@@ -121,6 +142,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 4_920 * MB,
         tools: true,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "phi-4-mini-instruct",
@@ -131,6 +154,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 2_490 * MB,
         tools: false,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "gemma-3-1b-it",
@@ -141,6 +166,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 810 * MB,
         tools: false,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
     },
     CatalogEntry {
         id: "gemma-3-4b-it",
@@ -151,6 +178,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 2_490 * MB,
         tools: false,
+        mmproj_file: Some("mmproj-model-f16.gguf"),
+        mmproj_size_bytes_approx: 850 * MB,
     },
     CatalogEntry {
         id: "gemma-3-12b-it",
@@ -161,6 +190,44 @@ pub const CATALOG: &[CatalogEntry] = &[
         quantization: "Q4_K_M",
         size_bytes_approx: 7_300 * MB,
         tools: false,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
+    },
+    CatalogEntry {
+        id: "qwen2.5-vl-3b-instruct",
+        display_name: "Qwen2.5 VL 3B Instruct (vision)",
+        family: "qwen2.5-vl",
+        repo: "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF",
+        file: "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+        quantization: "Q4_K_M",
+        size_bytes_approx: 1_930 * MB,
+        tools: false,
+        mmproj_file: Some("mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"),
+        mmproj_size_bytes_approx: 840 * MB,
+    },
+    CatalogEntry {
+        id: "qwen2.5-vl-7b-instruct",
+        display_name: "Qwen2.5 VL 7B Instruct (vision)",
+        family: "qwen2.5-vl",
+        repo: "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF",
+        file: "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+        quantization: "Q4_K_M",
+        size_bytes_approx: 4_680 * MB,
+        tools: false,
+        mmproj_file: Some("mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf"),
+        mmproj_size_bytes_approx: 850 * MB,
+    },
+    CatalogEntry {
+        id: "smolvlm-256m-instruct",
+        display_name: "SmolVLM 256M Instruct (tiny vision; smoke tests)",
+        family: "smolvlm",
+        repo: "ggml-org/SmolVLM-256M-Instruct-GGUF",
+        file: "SmolVLM-256M-Instruct-Q8_0.gguf",
+        quantization: "Q8_0",
+        size_bytes_approx: 180 * MB,
+        tools: false,
+        mmproj_file: Some("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf"),
+        mmproj_size_bytes_approx: 100 * MB,
     },
 ];
 
@@ -183,7 +250,24 @@ pub struct ModelRef {
     /// True when it came from the curated catalog.
     pub curated: bool,
     pub tools: bool,
+    /// The model accepts image input once its projector is installed.
+    #[serde(default)]
+    pub vision: bool,
     pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes_approx: Option<u64>,
+    /// Multimodal projector downloaded alongside the model (vision models).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj: Option<ExtraFile>,
+}
+
+/// A companion file that is downloaded with the model (today: the multimodal
+/// projector of a vision model) and stored in the model's directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtraFile {
+    pub url: String,
+    /// File name (basename is used locally).
+    pub file: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes_approx: Option<u64>,
 }
@@ -215,8 +299,14 @@ impl ModelRef {
                 file: entry.file.to_string(),
                 curated: true,
                 tools: entry.tools,
+                vision: entry.mmproj_file.is_some(),
                 display_name: entry.display_name.to_string(),
                 size_bytes_approx: Some(entry.size_bytes_approx),
+                mmproj: entry.mmproj_file.map(|f| ExtraFile {
+                    url: hf_url(entry.repo, f),
+                    file: f.to_string(),
+                    size_bytes_approx: Some(entry.mmproj_size_bytes_approx),
+                }),
             });
         }
 
@@ -288,9 +378,56 @@ impl ModelRef {
             file,
             curated: false,
             tools: false,
+            vision: false,
             display_name,
             size_bytes_approx: None,
+            mmproj: None,
         })
+    }
+
+    /// Attach a multimodal projector to a non-catalog reference: a file name in
+    /// the same Hugging Face repo (`mmproj-….gguf`) or a full http(s) URL.
+    /// Makes the model a vision model once installed.
+    pub fn with_mmproj(mut self, spec: &str) -> Result<ModelRef, String> {
+        let spec = spec.trim();
+        if spec.is_empty() {
+            return Ok(self);
+        }
+        let (url, file) =
+            if spec.starts_with("http://") || spec.starts_with("https://") {
+                let path = spec.split('?').next().unwrap_or(spec);
+                (
+                    spec.to_string(),
+                    path.rsplit('/').next().unwrap_or("").to_string(),
+                )
+            } else {
+                match &self.source {
+                    ModelSource::HuggingFace { repo, .. } => (hf_url(repo, spec), spec.to_string()),
+                    _ => return Err(
+                        "mmproj must be a full URL when the model is not from a Hugging Face repo"
+                            .into(),
+                    ),
+                }
+            };
+        if !file.to_ascii_lowercase().ends_with(".gguf") {
+            return Err(format!("mmproj '{file}' is not a .gguf file"));
+        }
+        self.mmproj = Some(ExtraFile {
+            url,
+            file,
+            size_bytes_approx: None,
+        });
+        self.vision = true;
+        Ok(self)
+    }
+
+    /// Model file plus projector, when both sizes are known.
+    pub fn total_size_bytes_approx(&self) -> Option<u64> {
+        let main = self.size_bytes_approx?;
+        match &self.mmproj {
+            None => Some(main),
+            Some(extra) => extra.size_bytes_approx.map(|e| main + e),
+        }
     }
 
     /// Hugging Face repo, if this reference points at one.

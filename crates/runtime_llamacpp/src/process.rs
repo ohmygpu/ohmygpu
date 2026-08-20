@@ -48,6 +48,9 @@ impl ServerProcess {
             .arg(&spec.model_id)
             .arg("--jinja")
             .arg("--no-webui");
+        if let Some(mmproj) = &spec.mmproj_path {
+            cmd.arg("--mmproj").arg(mmproj);
+        }
         if let Some(ctx) = spec.context_length {
             cmd.arg("--ctx-size").arg(ctx.to_string());
         }

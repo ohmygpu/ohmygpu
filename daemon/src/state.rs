@@ -19,6 +19,8 @@ pub struct AppState {
     /// Actual bound address (host/port after binding).
     pub host: String,
     pub port: u16,
+    /// Outbound HTTP (fetching remote images for vision requests).
+    pub http: reqwest::Client,
     shutdown_tx: watch::Sender<bool>,
 }
 
@@ -42,6 +44,11 @@ impl AppState {
             started_at: Instant::now(),
             host,
             port,
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(20))
+                .user_agent(concat!("ohmygpu-runtime/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .expect("reqwest client"),
             shutdown_tx,
         });
         (state, shutdown_rx)

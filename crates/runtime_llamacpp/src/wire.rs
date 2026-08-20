@@ -6,10 +6,38 @@
 //! live in the daemon and only ever see `ohmygpu_inference` types.
 
 use ohmygpu_inference::{
-    FinishReason, InferenceError, InferenceRequest, InputItem, StreamEvent, ToolChoice, Usage,
+    ContentPart, FinishReason, InferenceError, InferenceRequest, InputItem, StreamEvent,
+    ToolChoice, Usage,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+/// Text-only messages go over as a plain string (what every llama-server build
+/// accepts); messages carrying images use the content-parts array that
+/// llama-server's multimodal path (`--mmproj`) understands.
+fn wire_content(parts: &[ContentPart]) -> Value {
+    if parts.iter().all(|p| !p.is_image()) {
+        let text: String = parts
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        return Value::String(text);
+    }
+    Value::Array(
+        parts
+            .iter()
+            .map(|p| match p {
+                ContentPart::Text { text } => json!({ "type": "text", "text": text }),
+                ContentPart::Image { url } => {
+                    json!({ "type": "image_url", "image_url": { "url": url } })
+                }
+            })
+            .collect(),
+    )
+}
 
 /// Build the JSON body for `POST /v1/chat/completions` (streaming).
 pub fn build_request(req: &InferenceRequest) -> Value {
@@ -18,7 +46,7 @@ pub fn build_request(req: &InferenceRequest) -> Value {
     for item in &req.input {
         match item {
             InputItem::Message { role, content } => {
-                messages.push(json!({ "role": role.as_str(), "content": content }));
+                messages.push(json!({ "role": role.as_str(), "content": wire_content(content) }));
             }
             InputItem::ToolCall(call) => {
                 let call_json = json!({
@@ -506,5 +534,35 @@ mod tests {
         let mut p = StreamParser::new();
         let err = p.feed(r#"{"error":{"code":500,"message":"context shift is disabled","type":"server_error"}}"#).unwrap_err();
         assert!(matches!(err, InferenceError::Backend(m) if m.contains("context shift")));
+    }
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+    use ohmygpu_inference::Role;
+
+    #[test]
+    fn text_only_messages_stay_plain_strings_and_images_become_parts() {
+        let req = InferenceRequest::new(
+            "m",
+            vec![
+                InputItem::system("be brief"),
+                InputItem::message(
+                    Role::User,
+                    vec![
+                        ContentPart::text("what colour?"),
+                        ContentPart::image("data:image/png;base64,AAAA"),
+                    ],
+                ),
+            ],
+        );
+        let body = build_request(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["content"], "be brief");
+        let parts = msgs[1]["content"].as_array().unwrap();
+        assert_eq!(parts[0], json!({"type": "text", "text": "what colour?"}));
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,AAAA");
     }
 }

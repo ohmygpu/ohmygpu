@@ -235,10 +235,20 @@ impl ModelManager {
             .or_else(|| pending.map(|p| p.display_name.clone()))
             .unwrap_or_else(|| id.to_string());
         let curated = installed.map(|m| m.curated).unwrap_or(cat.is_some());
-        let capabilities = installed
-            .map(|m| m.capabilities)
-            .or_else(|| cat.map(|c| ModelCapabilities { tools: c.tools }))
-            .or_else(|| pending.map(|p| ModelCapabilities { tools: p.tools }))
+        // While a download is in flight the pending reference describes what is
+        // being installed (e.g. a projector being added to an installed model).
+        let capabilities = pending
+            .map(|p| ModelCapabilities {
+                tools: p.tools,
+                vision: p.vision,
+            })
+            .or_else(|| installed.map(|m| m.capabilities))
+            .or_else(|| {
+                cat.map(|c| ModelCapabilities {
+                    tools: c.tools,
+                    vision: c.mmproj_file.is_some(),
+                })
+            })
             .unwrap_or_default();
         let source = installed.map(|m| m.source.clone()).or_else(|| {
             cat.map(|c| ModelSource::HuggingFace {
@@ -280,7 +290,7 @@ impl ModelManager {
             format: installed.map(|m| m.format.clone()),
             size_bytes: installed.map(|m| m.size_bytes),
             size_bytes_approx: if installed.is_none() {
-                cat.map(|c| c.size_bytes_approx)
+                cat.map(|c| c.size_bytes_approx + c.mmproj_size_bytes_approx)
             } else {
                 None
             },
@@ -346,6 +356,15 @@ impl ModelManager {
             .collect()
     }
 
+    /// Capabilities of an installed model (`None` if not installed).
+    pub fn capabilities_of(&self, id: &str) -> Option<ModelCapabilities> {
+        self.registry
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|m| m.capabilities)
+    }
+
     pub fn installed_count(&self) -> usize {
         self.registry.lock().unwrap().list().len()
     }
@@ -360,9 +379,15 @@ impl ModelManager {
         self: &Arc<Self>,
         reference: &str,
         id_override: Option<&str>,
+        mmproj: Option<&str>,
     ) -> Result<ModelView, ManagerError> {
-        let mref =
+        let mut mref =
             ModelRef::parse(reference, id_override).map_err(ManagerError::InvalidReference)?;
+        if let Some(m) = mmproj {
+            mref = mref
+                .with_mmproj(m)
+                .map_err(ManagerError::InvalidReference)?;
+        }
         let id = mref.id.clone();
 
         let (gen, cancel) = {
@@ -372,19 +397,26 @@ impl ModelManager {
                 .models
                 .entry(id.clone())
                 .or_insert_with(|| Record::new(ModelState::NotInstalled));
-            match &rec.state {
-                ModelState::Downloading { .. } => return Ok(self.view_locked(&id, rec, &registry)),
-                s if registry.contains(&id) && s.is_installed() => {
-                    return Ok(self.view_locked(&id, rec, &registry))
+            if matches!(rec.state, ModelState::Downloading { .. }) {
+                return Ok(self.view_locked(&id, rec, &registry));
+            }
+            if let Some(installed) = registry.get(&id).filter(|_| rec.state.is_installed()) {
+                // Installed already. The only reason to download again is a vision
+                // projector the installed copy does not have yet — and only while
+                // the model is not running (the projector is read at start).
+                let wants_projector = mref.mmproj.is_some() && installed.mmproj_path.is_none();
+                if !(wants_projector && rec.state.can_start()) {
+                    return Ok(self.view_locked(&id, rec, &registry));
                 }
-                ModelState::NotInstalled | ModelState::Error { .. } => {}
-                other => {
-                    return Err(ManagerError::InvalidState {
-                        model: id,
-                        state: other.name().to_string(),
-                        action: "pull",
-                    })
-                }
+            } else if !matches!(
+                rec.state,
+                ModelState::NotInstalled | ModelState::Error { .. }
+            ) {
+                return Err(ManagerError::InvalidState {
+                    model: id,
+                    state: rec.state.name().to_string(),
+                    action: "pull",
+                });
             }
             rec.generation += 1;
             let cancel = Arc::new(AtomicBool::new(false));
@@ -393,7 +425,7 @@ impl ModelManager {
             rec.state = ModelState::Downloading {
                 progress: DownloadProgress {
                     downloaded_bytes: 0,
-                    total_bytes: mref.size_bytes_approx,
+                    total_bytes: mref.total_size_bytes_approx(),
                 },
             };
             (rec.generation, cancel)
@@ -418,106 +450,172 @@ impl ModelManager {
 
     async fn run_download(self: Arc<Self>, mref: ModelRef, gen: u64, cancel: Arc<AtomicBool>) {
         let id = mref.id.clone();
-        let url = mref.url.clone();
-        let file_name = mref
-            .file
-            .rsplit('/')
-            .next()
-            .unwrap_or(&mref.file)
-            .to_string();
-        let dest = self
-            .config
-            .models_dir(&self.paths)
-            .join(&id)
-            .join(&file_name);
-        tracing::info!(model = %id, "downloading {url} → {}", dest.display());
+        let model_dir = self.config.models_dir(&self.paths).join(&id);
+        let basename = |f: &str| f.rsplit('/').next().unwrap_or(f).to_string();
 
-        let progress_self = self.clone();
-        let progress_id = id.clone();
-        let last = Arc::new(Mutex::new(0u64));
-        let progress: ohmygpu_core::download::ProgressCallback =
-            Arc::new(move |p: DownloadProgress| {
-                // Throttle lock traffic: update on every 512 KiB or on completion.
-                let mut l = last.lock().unwrap();
-                let done = p
-                    .total_bytes
-                    .map(|t| p.downloaded_bytes >= t)
-                    .unwrap_or(false);
-                if !done && p.downloaded_bytes.saturating_sub(*l) < 512 * 1024 {
-                    return;
-                }
-                *l = p.downloaded_bytes;
-                drop(l);
-                let mut inner = progress_self.inner.lock().unwrap();
-                if let Some(rec) = inner.models.get_mut(&progress_id) {
-                    if rec.generation == gen {
-                        if let ModelState::Downloading { progress } = &mut rec.state {
-                            *progress = p;
-                        }
-                    }
-                }
-                drop(inner);
-                progress_self.notify();
+        // The files that make up this model: the weights, plus the projector of a
+        // vision model. Files that already exist are kept (that is how a projector
+        // is added to an installed model).
+        struct Planned {
+            url: String,
+            dest: PathBuf,
+            approx: Option<u64>,
+        }
+        let mut plan = vec![Planned {
+            url: mref.url.clone(),
+            dest: model_dir.join(basename(&mref.file)),
+            approx: mref.size_bytes_approx,
+        }];
+        if let Some(extra) = &mref.mmproj {
+            plan.push(Planned {
+                url: extra.url.clone(),
+                dest: model_dir.join(basename(&extra.file)),
+                approx: extra.size_bytes_approx,
             });
+        }
+        let total_approx: Option<u64> = plan.iter().map(|p| p.approx).sum();
 
-        let result = self
-            .downloader
-            .download(&url, &dest, Some(progress), Some(cancel))
-            .await;
-        match result {
-            Ok(size) => {
-                let installed = InstalledModel {
-                    id: id.clone(),
-                    display_name: mref.display_name.clone(),
-                    source: mref.source.clone(),
-                    format: "gguf".into(),
-                    path: dest.clone(),
-                    size_bytes: size,
-                    installed_at: Utc::now(),
-                    capabilities: ModelCapabilities { tools: mref.tools },
-                    curated: mref.curated,
-                };
-                let mut inner = self.inner.lock().unwrap();
-                let Some(rec) = inner.models.get_mut(&id) else {
-                    return;
-                };
-                if rec.generation != gen {
-                    // A delete raced with us; leave the file for delete to clean up.
-                    return;
+        let fail = |message: String| {
+            tracing::warn!(model = %id, "{message}");
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(rec) = inner.models.get_mut(&id) {
+                if rec.generation == gen {
+                    rec.state = ModelState::Error { message };
+                    rec.cancel_download = None;
+                    rec.task = None;
                 }
-                if let Err(e) = self.registry.lock().unwrap().add(installed) {
-                    rec.state = ModelState::Error {
-                        message: format!("failed to save registry: {e}"),
-                    };
-                } else {
-                    rec.state = ModelState::Installed;
-                }
-                rec.pending_ref = None;
-                rec.cancel_download = None;
-                rec.task = None;
-                drop(inner);
-                tracing::info!(model = %id, "installed ({size} bytes)");
-                self.notify();
             }
-            Err(DownloadError::Cancelled) => {
-                tracing::info!(model = %id, "download cancelled");
-            }
-            Err(e) => {
-                tracing::warn!(model = %id, "download failed: {e}");
-                let mut inner = self.inner.lock().unwrap();
-                if let Some(rec) = inner.models.get_mut(&id) {
-                    if rec.generation == gen {
-                        rec.state = ModelState::Error {
-                            message: format!("download failed: {e}"),
-                        };
-                        rec.cancel_download = None;
-                        rec.task = None;
-                    }
+            drop(inner);
+            self.notify();
+        };
+
+        let mut done_before: u64 = 0;
+        let mut sizes: Vec<u64> = Vec::with_capacity(plan.len());
+        for (i, file) in plan.iter().enumerate() {
+            if let Ok(meta) = tokio::fs::metadata(&file.dest).await {
+                if meta.len() > 0 {
+                    tracing::info!(model = %id, "keeping existing {}", file.dest.display());
+                    sizes.push(meta.len());
+                    done_before += meta.len();
+                    continue;
                 }
-                drop(inner);
-                self.notify();
+            }
+            tracing::info!(model = %id, "downloading {} → {}", file.url, file.dest.display());
+            let progress = self.download_progress(
+                id.clone(),
+                gen,
+                done_before,
+                total_approx,
+                i + 1 == plan.len(),
+            );
+            match self
+                .downloader
+                .download(&file.url, &file.dest, Some(progress), Some(cancel.clone()))
+                .await
+            {
+                Ok(size) => {
+                    sizes.push(size);
+                    done_before += size;
+                }
+                Err(DownloadError::Cancelled) => {
+                    tracing::info!(model = %id, "download cancelled");
+                    return;
+                }
+                Err(e) => {
+                    fail(format!("download failed: {e}"));
+                    return;
+                }
             }
         }
+
+        let size: u64 = sizes.iter().sum();
+        let installed = InstalledModel {
+            id: id.clone(),
+            display_name: mref.display_name.clone(),
+            source: mref.source.clone(),
+            format: "gguf".into(),
+            path: plan[0].dest.clone(),
+            mmproj_path: plan.get(1).map(|p| p.dest.clone()),
+            size_bytes: size,
+            installed_at: Utc::now(),
+            capabilities: ModelCapabilities {
+                tools: mref.tools,
+                vision: mref.mmproj.is_some(),
+            },
+            curated: mref.curated,
+        };
+        let mut inner = self.inner.lock().unwrap();
+        let Some(rec) = inner.models.get_mut(&id) else {
+            return;
+        };
+        if rec.generation != gen {
+            // A delete raced with us; leave the files for delete to clean up.
+            return;
+        }
+        if let Err(e) = self.registry.lock().unwrap().add(installed) {
+            rec.state = ModelState::Error {
+                message: format!("failed to save registry: {e}"),
+            };
+        } else {
+            rec.state = ModelState::Installed;
+        }
+        rec.pending_ref = None;
+        rec.cancel_download = None;
+        rec.task = None;
+        drop(inner);
+        tracing::info!(model = %id, "installed ({size} bytes)");
+        self.notify();
+    }
+
+    /// Progress reporter for one file of a multi-file download: bytes are
+    /// offset by what earlier files contributed; totals prefer the catalog
+    /// estimate and never fall below what was already downloaded.
+    fn download_progress(
+        self: &Arc<Self>,
+        id: String,
+        gen: u64,
+        offset: u64,
+        total_approx: Option<u64>,
+        last_file: bool,
+    ) -> ohmygpu_core::download::ProgressCallback {
+        let progress_self = self.clone();
+        let last_reported = Arc::new(Mutex::new(0u64));
+        Arc::new(move |p: DownloadProgress| {
+            // Throttle lock traffic: update on every 512 KiB or on completion.
+            let mut l = last_reported.lock().unwrap();
+            let done = p
+                .total_bytes
+                .map(|t| p.downloaded_bytes >= t)
+                .unwrap_or(false);
+            if !done && p.downloaded_bytes.saturating_sub(*l) < 512 * 1024 {
+                return;
+            }
+            *l = p.downloaded_bytes;
+            drop(l);
+            let downloaded = offset + p.downloaded_bytes;
+            let total = total_approx
+                .or_else(|| {
+                    if last_file {
+                        p.total_bytes.map(|t| offset + t)
+                    } else {
+                        None
+                    }
+                })
+                .map(|t| t.max(downloaded));
+            let mut inner = progress_self.inner.lock().unwrap();
+            if let Some(rec) = inner.models.get_mut(&id) {
+                if rec.generation == gen {
+                    if let ModelState::Downloading { progress } = &mut rec.state {
+                        *progress = DownloadProgress {
+                            downloaded_bytes: downloaded,
+                            total_bytes: total,
+                        };
+                    }
+                }
+            }
+            drop(inner);
+            progress_self.notify();
+        })
     }
 
     /// Stop (if needed), delete files, and forget the model.
@@ -596,7 +694,7 @@ impl ModelManager {
         id: &str,
         opts: StartOptions,
     ) -> Result<ModelView, ManagerError> {
-        let (gen, model_path) = {
+        let (gen, model_path, mmproj_path) = {
             let mut inner = self.inner.lock().unwrap();
             let registry = self.registry.lock().unwrap();
             let rec = inner
@@ -623,13 +721,18 @@ impl ModelManager {
             rec.state = ModelState::Starting { message: None };
             rec.instance = None;
             rec.started_at = None;
-            (rec.generation, installed.path.clone())
+            (
+                rec.generation,
+                installed.path.clone(),
+                installed.mmproj_path.clone(),
+            )
         };
         self.notify();
 
         let spec = StartSpec {
             model_id: id.to_string(),
             model_path,
+            mmproj_path,
             context_length: opts.context_length,
             gpu_layers: opts.gpu_layers,
             threads: opts.threads,

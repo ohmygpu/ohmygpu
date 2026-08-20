@@ -90,6 +90,7 @@ impl RuntimeBackend for MockBackend {
         let inst = Arc::new(MockInstance {
             model_id: spec.model_id,
             spec_context: spec.context_length,
+            spec_mmproj: spec.mmproj_path,
             exit_tx,
             exit_rx,
         });
@@ -101,6 +102,8 @@ impl RuntimeBackend for MockBackend {
 pub struct MockInstance {
     pub model_id: String,
     pub spec_context: Option<u32>,
+    /// Projector path the manager handed us (vision models).
+    pub spec_mmproj: Option<std::path::PathBuf>,
     exit_tx: watch::Sender<Option<InstanceStatus>>,
     exit_rx: watch::Receiver<Option<InstanceStatus>>,
 }
@@ -115,15 +118,15 @@ impl MockInstance {
     }
 }
 
-fn last_user_text(req: &InferenceRequest) -> String {
+/// Text and image count of the last user message.
+fn last_user_message(req: &InferenceRequest) -> (String, usize) {
     req.input
         .iter()
         .rev()
         .find_map(|i| match i {
             InputItem::Message {
-                role: Role::User,
-                content,
-            } => Some(content.clone()),
+                role: Role::User, ..
+            } => Some((i.text().unwrap_or_default(), i.image_count())),
             _ => None,
         })
         .unwrap_or_default()
@@ -158,7 +161,7 @@ impl ModelInstance for MockInstance {
         if let Some(InstanceStatus::Exited { message, .. }) = self.exit_rx.borrow().clone() {
             return Err(InferenceError::Unavailable(message));
         }
-        let text = last_user_text(&request);
+        let (text, images) = last_user_message(&request);
         let usage = Usage {
             input_tokens: request.input.len() as u32,
             output_tokens: 2,
@@ -198,7 +201,11 @@ impl ModelInstance for MockInstance {
             }));
         } else {
             events.push(Ok(StreamEvent::TextDelta {
-                text: "echo: ".into(),
+                text: if images > 0 {
+                    format!("saw {images} image(s); echo: ")
+                } else {
+                    "echo: ".into()
+                },
             }));
             events.push(Ok(StreamEvent::TextDelta { text }));
             events.push(Ok(StreamEvent::Completed {

@@ -29,6 +29,9 @@ pub enum ModelSource {
 pub struct ModelCapabilities {
     /// Native tool calling is expected to work with this model.
     pub tools: bool,
+    /// The model accepts image input (a multimodal projector is installed).
+    #[serde(default)]
+    pub vision: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,6 +43,10 @@ pub struct InstalledModel {
     pub format: String,
     /// Absolute path to the model file.
     pub path: PathBuf,
+    /// Multimodal projector file (vision models), stored next to `path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj_path: Option<PathBuf>,
+    /// Total bytes on disk (model file plus projector).
     pub size_bytes: u64,
     pub installed_at: DateTime<Utc>,
     #[serde(default)]
@@ -161,9 +168,13 @@ mod tests {
             },
             format: "gguf".into(),
             path,
+            mmproj_path: None,
             size_bytes: 3,
             installed_at: Utc::now(),
-            capabilities: ModelCapabilities { tools: true },
+            capabilities: ModelCapabilities {
+                tools: true,
+                vision: false,
+            },
             curated: true,
         }
     }

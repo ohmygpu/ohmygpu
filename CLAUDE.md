@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Product
 
 **OhMyGPU Runtime** — an open-source, embeddable, headless local AI runtime for application developers.
-It runs GGUF models through a supervised `llama-server` (llama.cpp) subprocess and exposes:
+It runs GGUF models (text, and vision models with a multimodal projector for image input) through a supervised `llama-server` (llama.cpp) subprocess and exposes:
 
 - `POST /v1/responses` (canonical) and `POST /v1/chat/completions` (compatibility) — an OpenAI-compatible **subset**, both feeding **one** internal inference pipeline
 - `GET /v1/models`
@@ -57,7 +57,7 @@ docs/recipes.md           recipe format spec: fields, merge rules, resolver cont
 
 ## Rules
 
-1. **One inference pipeline.** New API features go through protocol adapters → `ohmygpu_inference` types → `ModelInstance`. Never let OpenAI schemas leak into `runtime_*` crates, and never let llama-server's wire format leak into `daemon/`.
+1. **One inference pipeline.** New API features go through protocol adapters → `ohmygpu_inference` types → `ModelInstance`. Never let OpenAI schemas leak into `runtime_*` crates, and never let llama-server's wire format leak into `daemon/`. Images follow the same rule: adapters turn `input_image`/`image_url` into `ContentPart::Image` (`daemon/src/api/images.rs` validates data: URLs and inlines http(s) URLs); backends only ever see `data:` URLs.
 2. **Explicit lifecycle.** All state changes go through `ModelManager`; background tasks must check the record `generation` before applying results.
 3. **CLI stays thin.** No model/runtime business logic in `cli/`; use the Management API (read-only offline fallbacks only).
 4. **Do not claim unimplemented API fields.** Unsupported request features return `400 unsupported`; document supported subsets in the README.

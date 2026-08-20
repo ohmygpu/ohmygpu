@@ -159,6 +159,10 @@ pub struct PullRequest {
     /// Optional id to install a non-catalog model under.
     #[serde(default)]
     pub id: Option<String>,
+    /// Multimodal projector for a non-catalog vision model: a `.gguf` file name in
+    /// the same Hugging Face repo, or a full URL. Makes the model accept images.
+    #[serde(default)]
+    pub mmproj: Option<String>,
 }
 
 /// 202 while downloading, 200 if it was already installed.
@@ -166,7 +170,9 @@ pub async fn pull_model(
     State(state): State<SharedState>,
     ApiJson(req): ApiJson<PullRequest>,
 ) -> Result<Response, ApiError> {
-    let view = state.manager.pull(&req.model, req.id.as_deref())?;
+    let view = state
+        .manager
+        .pull(&req.model, req.id.as_deref(), req.mmproj.as_deref())?;
     let code = if view.state == "downloading" {
         StatusCode::ACCEPTED
     } else {

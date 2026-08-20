@@ -186,3 +186,6 @@ Binds `127.0.0.1` only. No auth, no accounts. Configurable host for advanced use
   Vulkan when a GPU is detected), Windows x64 (CPU/Vulkan). CUDA builds and other
   targets: point `backend.llamacpp.server_path` at your own build.
 - No response persistence, conversations, or hosted tools (by design).
+- Vision: image input only (no image output, no audio); remote image URLs are
+  fetched by the daemon with a 20 s timeout and a 20 MB cap; a model accepts
+  images only when a projector (`mmproj`) is installed next to it.

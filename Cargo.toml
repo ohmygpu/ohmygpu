@@ -44,6 +44,7 @@ bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+base64 = "0.22"
 serde-saphyr = "1"        # YAML for hand-authored recipes (serde_yaml is archived)
 schemars = "1"            # JSON Schema generation for the recipe format
 semver = "1"

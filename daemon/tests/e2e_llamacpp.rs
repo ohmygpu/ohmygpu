@@ -47,19 +47,18 @@ async fn call(
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
-#[tokio::test]
-#[ignore = "needs network + real inference; run with OHMYGPU_E2E=1 -- --ignored"]
-async fn pull_start_infer_stop_with_real_llamacpp() {
-    if std::env::var("OHMYGPU_E2E").ok().as_deref() != Some("1") {
-        eprintln!("skipping: set OHMYGPU_E2E=1");
-        return;
-    }
-    let tmp;
-    let paths = match std::env::var("OHMYGPU_E2E_HOME") {
-        Ok(dir) => Paths::new(dir),
+/// Real backend + real data dir (`OHMYGPU_E2E_HOME`, or a temp dir kept alive
+/// by the returned guard).
+fn real_app() -> (
+    ohmygpu_daemon::state::SharedState,
+    axum::Router,
+    Option<tempfile::TempDir>,
+) {
+    let (paths, tmp) = match std::env::var("OHMYGPU_E2E_HOME") {
+        Ok(dir) => (Paths::new(dir), None),
         Err(_) => {
-            tmp = tempfile::tempdir().unwrap();
-            Paths::new(tmp.path())
+            let t = tempfile::tempdir().unwrap();
+            (Paths::new(t.path()), Some(t))
         }
     };
     paths.ensure_dirs().unwrap();
@@ -81,6 +80,17 @@ async fn pull_start_infer_stop_with_real_llamacpp() {
     )
     .unwrap();
     let app = router(state.clone());
+    (state, app, tmp)
+}
+
+#[tokio::test]
+#[ignore = "needs network + real inference; run with OHMYGPU_E2E=1 -- --ignored"]
+async fn pull_start_infer_stop_with_real_llamacpp() {
+    if std::env::var("OHMYGPU_E2E").ok().as_deref() != Some("1") {
+        eprintln!("skipping: set OHMYGPU_E2E=1");
+        return;
+    }
+    let (state, app, _tmp) = real_app();
 
     // pull
     let (s, body) = call(
@@ -181,5 +191,133 @@ async fn pull_start_infer_stop_with_real_llamacpp() {
     assert_eq!(s, StatusCode::OK, "{body}");
     let v: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["model"]["state"], "stopped");
+    state.manager.stop_all().await;
+}
+
+const VISION_MODEL: &str = "smolvlm-256m-instruct";
+/// 64×64 solid red PNG.
+const RED_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAS0lEQVR42u3PQQkAAAgAsetfWiP4FgYrsKZeS0BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEDgsqnc8OJg6Ln3AAAAAElFTkSuQmCC";
+
+/// Vision: pull a tiny VLM (weights + projector), start it with `--mmproj`, and
+/// ask about a solid red image through both APIs.
+#[tokio::test]
+#[ignore = "needs network + real inference; run with OHMYGPU_E2E=1 -- --ignored"]
+async fn vision_model_sees_an_image_with_real_llamacpp() {
+    if std::env::var("OHMYGPU_E2E").ok().as_deref() != Some("1") {
+        eprintln!("skipping: set OHMYGPU_E2E=1");
+        return;
+    }
+    let (state, app, _tmp) = real_app();
+    let data_url = format!("data:image/png;base64,{RED_PNG_B64}");
+
+    let (s, body) = call(
+        &app,
+        "POST",
+        "/ohmygpu/v1/models/pull",
+        Some(json!({"model": VISION_MODEL})),
+    )
+    .await;
+    assert!(
+        s == StatusCode::ACCEPTED || s == StatusCode::OK,
+        "{s} {body}"
+    );
+    let st = state
+        .manager
+        .wait_for(VISION_MODEL, Duration::from_secs(1800), |s| {
+            !matches!(s, ModelState::Downloading { .. })
+        })
+        .await
+        .expect("download did not finish in time");
+    assert_eq!(
+        st,
+        Some(ModelState::Installed),
+        "{:?}",
+        state.manager.get(VISION_MODEL)
+    );
+    let (_, body) = call(
+        &app,
+        "GET",
+        &format!("/ohmygpu/v1/models/{VISION_MODEL}"),
+        None,
+    )
+    .await;
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["capabilities"]["vision"], true, "{v}");
+
+    let (s, body) = call(
+        &app,
+        "POST",
+        &format!("/ohmygpu/v1/models/{VISION_MODEL}/start?wait=true&timeout=900"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+
+    // chat completions with an inline image
+    let (s, body) = call(
+        &app,
+        "POST",
+        "/v1/chat/completions",
+        Some(json!({
+            "model": VISION_MODEL,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "What is the dominant color of this image? Answer with one word."},
+                {"type": "image_url", "image_url": {"url": data_url}}
+            ]}],
+            "max_tokens": 12
+        })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let answer = v["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    eprintln!("chat/completions (image) → {answer:?}");
+    assert!(answer.to_ascii_lowercase().contains("red"), "{v}");
+
+    // responses with input_image
+    let (s, body) = call(
+        &app,
+        "POST",
+        "/v1/responses",
+        Some(json!({
+            "model": VISION_MODEL,
+            "input": [{"role": "user", "content": [
+                {"type": "input_text", "text": "What color is this image? One word."},
+                {"type": "input_image", "image_url": data_url}
+            ]}],
+            "max_output_tokens": 12
+        })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let answer = v["output"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    eprintln!("responses (image) → {answer:?}");
+    assert!(answer.to_ascii_lowercase().contains("red"), "{v}");
+
+    // text-only still works on the same model
+    let (s, body) = call(
+        &app,
+        "POST",
+        "/v1/responses",
+        Some(json!({"model": VISION_MODEL, "input": "Reply with exactly: pong", "max_output_tokens": 8})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+
+    let (s, body) = call(
+        &app,
+        "POST",
+        &format!("/ohmygpu/v1/models/{VISION_MODEL}/stop"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
     state.manager.stop_all().await;
 }

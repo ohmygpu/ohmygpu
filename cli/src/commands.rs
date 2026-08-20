@@ -172,32 +172,37 @@ pub async fn model_list(client: &Client, paths: &Paths, json: bool) -> Result<()
         return Ok(());
     }
     if models.is_empty() {
-        println!("No models installed. Try: omg model pull qwen2.5-1.5b-instruct");
+        println!("No models installed. Try: omg model pull qwen2.5-0.5b-instruct");
         println!("See supported models with: omg model catalog");
         return Ok(());
     }
     println!(
-        "{:<28} {:<12} {:>9}  {:<6} NAME",
-        "ID", "STATE", "SIZE", "TOOLS"
+        "{:<28} {:<12} {:>9}  {:<6} {:<7} NAME",
+        "ID", "STATE", "SIZE", "TOOLS", "VISION"
     );
     for m in &models {
         println!(
-            "{:<28} {:<12} {:>9}  {:<6} {}",
+            "{:<28} {:<12} {:>9}  {:<6} {:<7} {}",
             m["id"].as_str().unwrap_or("?"),
             m["state"].as_str().unwrap_or("?"),
             m["size_bytes"]
                 .as_u64()
                 .map(human_bytes)
                 .unwrap_or_else(|| "?".into()),
-            if m["capabilities"]["tools"].as_bool().unwrap_or(false) {
-                "yes"
-            } else {
-                "no"
-            },
+            yes_no(m["capabilities"]["tools"].as_bool().unwrap_or(false)),
+            yes_no(m["capabilities"]["vision"].as_bool().unwrap_or(false)),
             m["display_name"].as_str().unwrap_or(""),
         );
     }
     Ok(())
+}
+
+fn yes_no(b: bool) -> &'static str {
+    if b {
+        "yes"
+    } else {
+        "no"
+    }
 }
 
 pub async fn model_catalog(client: &Client, json: bool) -> Result<()> {
@@ -222,22 +227,19 @@ pub async fn model_catalog(client: &Client, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28} {:>9}  {:<6} {:<14} NAME",
-        "ID", "SIZE", "TOOLS", "STATE"
+        "{:<28} {:>9}  {:<6} {:<7} {:<14} NAME",
+        "ID", "SIZE", "TOOLS", "VISION", "STATE"
     );
     for m in &models {
+        let size = m["size_bytes_approx"]
+            .as_u64()
+            .map(|s| s + m["mmproj_size_bytes_approx"].as_u64().unwrap_or(0));
         println!(
-            "{:<28} {:>9}  {:<6} {:<14} {}",
+            "{:<28} {:>9}  {:<6} {:<7} {:<14} {}",
             m["id"].as_str().unwrap_or("?"),
-            m["size_bytes_approx"]
-                .as_u64()
-                .map(human_bytes)
-                .unwrap_or_else(|| "?".into()),
-            if m["tools"].as_bool().unwrap_or(false) {
-                "yes"
-            } else {
-                "no"
-            },
+            size.map(human_bytes).unwrap_or_else(|| "?".into()),
+            yes_no(m["tools"].as_bool().unwrap_or(false)),
+            yes_no(m["mmproj_file"].is_string()),
             m["state"].as_str().unwrap_or("?"),
             m["display_name"].as_str().unwrap_or(""),
         );
@@ -247,10 +249,19 @@ pub async fn model_catalog(client: &Client, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn model_pull(client: &Client, model: &str, id: Option<&str>, json: bool) -> Result<()> {
+pub async fn model_pull(
+    client: &Client,
+    model: &str,
+    id: Option<&str>,
+    mmproj: Option<&str>,
+    json: bool,
+) -> Result<()> {
     let mut body = json!({ "model": model });
     if let Some(id) = id {
         body["id"] = json!(id);
+    }
+    if let Some(mmproj) = mmproj {
+        body["mmproj"] = json!(mmproj);
     }
     let v = client.post("/ohmygpu/v1/models/pull", Some(body)).await?;
     let m = &v["model"];

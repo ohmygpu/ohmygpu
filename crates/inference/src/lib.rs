@@ -38,12 +38,40 @@ impl Role {
     }
 }
 
+/// One piece of message content.
+///
+/// Text is allowed everywhere. Images are allowed only in `user` messages and
+/// only for models whose `capabilities.vision` is true; by the time a request
+/// reaches a runtime adapter every image is a `data:image/...;base64,…` URL
+/// (protocol adapters fetch remote URLs and enforce size limits first).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    Image { url: String },
+}
+
+impl ContentPart {
+    pub fn text(text: impl Into<String>) -> Self {
+        ContentPart::Text { text: text.into() }
+    }
+    pub fn image(url: impl Into<String>) -> Self {
+        ContentPart::Image { url: url.into() }
+    }
+    pub fn is_image(&self) -> bool {
+        matches!(self, ContentPart::Image { .. })
+    }
+}
+
 /// One item of conversation input, in order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InputItem {
-    /// A plain text message.
-    Message { role: Role, content: String },
+    /// A message: text parts, plus image parts for vision models.
+    Message {
+        role: Role,
+        content: Vec<ContentPart>,
+    },
     /// A tool call previously emitted by the assistant (echoed back so the model
     /// sees its own call before the result).
     ToolCall(ToolCall),
@@ -52,22 +80,38 @@ pub enum InputItem {
 }
 
 impl InputItem {
+    pub fn message(role: Role, content: Vec<ContentPart>) -> Self {
+        InputItem::Message { role, content }
+    }
     pub fn system(content: impl Into<String>) -> Self {
-        InputItem::Message {
-            role: Role::System,
-            content: content.into(),
-        }
+        Self::message(Role::System, vec![ContentPart::text(content)])
     }
     pub fn user(content: impl Into<String>) -> Self {
-        InputItem::Message {
-            role: Role::User,
-            content: content.into(),
-        }
+        Self::message(Role::User, vec![ContentPart::text(content)])
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        InputItem::Message {
-            role: Role::Assistant,
-            content: content.into(),
+        Self::message(Role::Assistant, vec![ContentPart::text(content)])
+    }
+    /// The concatenated text of a message (images skipped); `None` for tool items.
+    pub fn text(&self) -> Option<String> {
+        match self {
+            InputItem::Message { content, .. } => Some(
+                content
+                    .iter()
+                    .filter_map(|p| match p {
+                        ContentPart::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+    /// Number of image parts in this item.
+    pub fn image_count(&self) -> usize {
+        match self {
+            InputItem::Message { content, .. } => content.iter().filter(|p| p.is_image()).count(),
+            _ => 0,
         }
     }
 }
@@ -146,6 +190,11 @@ impl InferenceRequest {
     }
 
     /// Validate what every backend needs regardless of protocol.
+    /// Does any input item carry an image?
+    pub fn has_images(&self) -> bool {
+        self.input.iter().any(|i| i.image_count() > 0)
+    }
+
     pub fn validate(&self) -> Result<(), InferenceError> {
         if self.model.trim().is_empty() {
             return Err(InferenceError::InvalidRequest("`model` is required".into()));
@@ -154,6 +203,30 @@ impl InferenceRequest {
             return Err(InferenceError::InvalidRequest(
                 "input must not be empty".into(),
             ));
+        }
+        for item in &self.input {
+            if let InputItem::Message { role, content } = item {
+                for part in content {
+                    if let ContentPart::Image { url } = part {
+                        if *role != Role::User {
+                            return Err(InferenceError::InvalidRequest(
+                                "images are only accepted in user messages".into(),
+                            ));
+                        }
+                        // Adapters check the media type and size of data: URLs and
+                        // inline http(s) URLs before dispatch; here we only reject
+                        // things that are neither.
+                        let ok = url.starts_with("data:")
+                            || url.starts_with("https://")
+                            || url.starts_with("http://");
+                        if !ok {
+                            return Err(InferenceError::InvalidRequest(
+                                "image url must be a data: URL or an http(s) URL".into(),
+                            ));
+                        }
+                    }
+                }
+            }
         }
         if let Some(t) = self.options.temperature {
             if !(0.0..=2.0).contains(&t) {
@@ -530,5 +603,90 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let back: InferenceRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(back, req);
+    }
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+
+    #[test]
+    fn text_helpers_and_image_counting() {
+        let item = InputItem::user("hi");
+        assert_eq!(item.text().as_deref(), Some("hi"));
+        assert_eq!(item.image_count(), 0);
+        let item = InputItem::message(
+            Role::User,
+            vec![
+                ContentPart::text("what is this? "),
+                ContentPart::image("data:image/png;base64,AAAA"),
+                ContentPart::text("thanks"),
+            ],
+        );
+        assert_eq!(item.text().as_deref(), Some("what is this? thanks"));
+        assert_eq!(item.image_count(), 1);
+        assert_eq!(
+            InputItem::ToolResult {
+                call_id: "c".into(),
+                output: "o".into()
+            }
+            .text(),
+            None
+        );
+    }
+
+    #[test]
+    fn images_only_in_user_messages_and_only_data_urls() {
+        let ok = InferenceRequest::new(
+            "m",
+            vec![InputItem::message(
+                Role::User,
+                vec![ContentPart::image("data:image/png;base64,AAAA")],
+            )],
+        );
+        assert!(ok.has_images());
+        ok.validate().unwrap();
+
+        let wrong_role = InferenceRequest::new(
+            "m",
+            vec![InputItem::message(
+                Role::System,
+                vec![ContentPart::image("data:image/png;base64,AAAA")],
+            )],
+        );
+        assert!(wrong_role.validate().is_err());
+
+        let remote = InferenceRequest::new(
+            "m",
+            vec![InputItem::message(
+                Role::User,
+                vec![ContentPart::image("https://example.com/a.png")],
+            )],
+        );
+        remote.validate().unwrap(); // adapters inline remote images before dispatch
+        let local_path = InferenceRequest::new(
+            "m",
+            vec![InputItem::message(
+                Role::User,
+                vec![ContentPart::image("/tmp/a.png")],
+            )],
+        );
+        assert!(local_path.validate().is_err());
+    }
+
+    #[test]
+    fn content_parts_serialize_tagged() {
+        let v = serde_json::to_value(InputItem::message(
+            Role::User,
+            vec![
+                ContentPart::text("a"),
+                ContentPart::image("data:image/png;base64,AA"),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(v["type"], "message");
+        assert_eq!(v["content"][0]["type"], "text");
+        assert_eq!(v["content"][1]["type"], "image");
+        assert_eq!(v["content"][1]["url"], "data:image/png;base64,AA");
     }
 }
