@@ -116,7 +116,7 @@ POST /ohmygpu/v1/shutdown
 
 Every state, download percentage, and failure reason is visible over HTTP. Nothing requires the CLI.
 
-## API reference (v0.1)
+## API reference
 
 ### Inference — OpenAI-compatible **subset** (`/v1`)
 
@@ -196,7 +196,7 @@ not_installed ─pull─▶ downloading ─▶ installed ─start─▶ starting
 
 ## Supported models
 
-v0.1 ships a small, verified catalog of single-file GGUF instruct models (Qwen2.5 0.5B–7B, Qwen3 4B, Llama 3.2 1B/3B, Llama 3.1 8B, Phi-4 mini, Gemma 3 1B–12B, SmolLM2 135M). `omg model catalog` lists them with sizes and whether native tool calling is supported. Any other GGUF can be pulled with `hf:owner/repo/file.gguf` or a direct URL, unsupported but usually fine.
+The runtime ships a small, verified catalog of single-file GGUF instruct models (Qwen2.5 0.5B–7B, Qwen3 4B, Llama 3.2 1B/3B, Llama 3.1 8B, Phi-4 mini, Gemma 3 1B–12B, SmolLM2 135M). `omg model catalog` lists them with sizes and whether native tool calling is supported. Any other GGUF can be pulled with `hf:owner/repo/file.gguf` or a direct URL, unsupported but usually fine.
 
 ## CLI
 
