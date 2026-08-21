@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 ohmygpu_core.workspace = true
 ohmygpu_daemon.workspace = true
+ohmygpu_runtime_api.workspace = true        # ProgressFn for `omg upgrade` download progress
+ohmygpu_runtime_common.workspace = true     # GitHub release download/extract helpers for `omg upgrade`
 tokio.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -20,6 +22,9 @@ anyhow.workspace = true
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+semver.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

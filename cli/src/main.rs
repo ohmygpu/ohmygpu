@@ -5,6 +5,7 @@
 
 mod client;
 mod commands;
+mod upgrade;
 
 use std::path::PathBuf;
 
@@ -75,6 +76,18 @@ enum Commands {
     Config {
         key: Option<String>,
         value: Option<String>,
+    },
+    /// Upgrade ohmygpu and ohmygpu-runtime in place from the latest GitHub release
+    #[command(alias = "self-update")]
+    Upgrade {
+        /// Install this release instead of the latest (e.g. v0.4.0)
+        version: Option<String>,
+        /// Only report whether a newer release exists
+        #[arg(long)]
+        check: bool,
+        /// Install even if that version is already installed
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -166,6 +179,22 @@ async fn main() -> Result<()> {
         Commands::Shutdown => commands::shutdown(&client).await,
         Commands::Config { key, value } => {
             commands::config(&paths, key.as_deref(), value.as_deref())
+        }
+        Commands::Upgrade {
+            version,
+            check,
+            force,
+        } => {
+            upgrade::upgrade(
+                &client,
+                upgrade::UpgradeOptions {
+                    version: version.as_deref(),
+                    check,
+                    force,
+                    json,
+                },
+            )
+            .await
         }
     }
 }

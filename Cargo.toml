@@ -53,6 +53,7 @@ symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac
 serde-saphyr = "1"        # YAML for hand-authored recipes (serde_yaml is archived)
 schemars = "1"            # JSON Schema generation for the recipe format
 semver = "1"
+sha2 = "0.10"             # SHA256SUMS.txt verification in `omg upgrade`
 
 # Error handling
 anyhow = "1"

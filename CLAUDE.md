@@ -28,6 +28,7 @@ OHMYGPU_E2E=1 cargo test -p ohmygpu_daemon --test e2e_llamacpp -- --ignored --no
 cargo run --bin ohmygpu-runtime -- --port 10692 --data-dir /tmp/omg      # standalone daemon
 cargo run --bin ohmygpu -- serve              # same daemon via the CLI
 cargo run --bin ohmygpu -- model catalog | model pull <id> | run <id> | stop <id> | status | hardware
+cargo run --bin ohmygpu -- upgrade [VERSION] [--check] [--force]   # self-update: replaces the *running* binaries' files — test on a copy
 make recipe-schema                            # regenerate schemas/recipe-v1.json after editing crates/core/src/recipe.rs
 ```
 
@@ -52,7 +53,10 @@ daemon/                   ohmygpu_daemon      manager.rs (ModelManager + Backend
                                               api/{responses,chat_completions,audio,images,models,management}.rs, audio.rs (decode + resample to 16 kHz),
                                               error.rs (OpenAI error envelope), server.rs (bind/graceful shutdown), main.rs (`ohmygpu-runtime` bin),
                                               testing.rs (MockBackend, `testing` feature), tests/api.rs, tests/e2e_llamacpp.rs
-cli/                      ohmygpu_cli         thin HTTP client of the Management API (`omg`)
+cli/                      ohmygpu_cli         thin HTTP client of the Management API (`omg`); upgrade.rs = `omg upgrade`
+                                              (self-update of both binaries from a GitHub release, SHA256SUMS verified)
+install.sh                `curl | sh` installer for macOS/Linux: latest release → existing install dir, else /usr/local/bin,
+                          else ~/.local/bin; attached to every release by the workflow; shellcheck-clean (CI checks it)
 recipes/                  example per-model recipes (YAML; loaded by core tests) — see docs/recipes.md
 schemas/recipe-v1.json    generated JSON Schema for recipes (`make recipe-schema`; a test fails when stale)
 archive/                  deferred code, not built

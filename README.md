@@ -38,7 +38,15 @@ Your app tells the runtime *ensure model exists → start model*, then uses the 
 
 Requires: macOS (Apple Silicon or Intel), Linux x86_64/arm64, or Windows x86_64. A GPU is used when present (Metal / Vulkan / CUDA); CPU works too.
 
-**1. Get the binaries.** Each release ships one archive per platform with two files — `ohmygpu-runtime` (the runtime) and `ohmygpu` (the CLI, `omg`) — nothing else to install. Put them anywhere; a directory on your `PATH` is convenient. Models and llama.cpp go to `~/.config/ohmygpu`, not next to the binaries.
+**1. Install** — one line on macOS and Linux. It downloads the latest release, verifies its checksum, and installs `ohmygpu-runtime` (the runtime), `ohmygpu` (the CLI) and the `omg` alias into `/usr/local/bin` (sudo only if that needs it) — or upgrades the copy you already have, in place:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.sh | sh
+```
+
+`--dir ~/.local/bin` (or `OHMYGPU_INSTALL_DIR`) picks the directory, `--version v0.5.0` (or `OHMYGPU_VERSION`) pins a release, `--no-sudo` never escalates; pass them as `sh -s -- --dir ~/.local/bin`. From then on **`omg upgrade`** updates both binaries in place (`omg upgrade --check` only looks, `omg upgrade v0.5.0` pins a release). Nothing else is installed: models and llama.cpp go to `~/.config/ohmygpu`, not next to the binaries.
+
+**Manual install (and Windows).** Each release ships one archive per platform with the two binaries — put them anywhere, ideally on your `PATH`:
 
 | Platform | Latest release |
 |---|---|
@@ -261,9 +269,10 @@ omg run <id> [--context-length N] [--gpu-layers N] [--threads N]
 omg stop <id>
 omg shutdown
 omg config [key [value]]
+omg upgrade [VERSION] [--check] [--force]  replace ohmygpu + ohmygpu-runtime in place with a GitHub release (default: latest)
 ```
 
-Every command except `serve`/`config` uses the Management API; add `--json` for machine-readable output. `--url` / `OHMYGPU_URL` point it at a non-default runtime.
+Every command except `serve`/`config`/`upgrade` uses the Management API; add `--json` for machine-readable output. `--url` / `OHMYGPU_URL` point it at a non-default runtime. `omg upgrade` verifies the release's `SHA256SUMS.txt`, swaps the binaries where they currently live (`sudo` if that directory needs it), and leaves a running runtime on the old version until you restart it; versions before 0.6.0 have no `upgrade` — rerun the install script once.
 
 ## Configuration & storage
 
