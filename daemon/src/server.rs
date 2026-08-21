@@ -10,12 +10,13 @@ use ohmygpu_core::hardware::HardwareInfo;
 use ohmygpu_core::paths::Paths;
 use ohmygpu_runtime_api::RuntimeBackend;
 use ohmygpu_runtime_llamacpp::LlamaCppBackend;
+use ohmygpu_runtime_whisper::WhisperBackend;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::api::router;
-use crate::manager::ModelManager;
+use crate::manager::{Backends, ModelManager};
 use crate::state::{AppState, SharedState};
 
 /// What a running daemon writes to `<data-dir>/daemon.json`.
@@ -45,11 +46,11 @@ pub fn build_state(
     paths: Paths,
     config: Config,
     hardware: HardwareInfo,
-    backend: Arc<dyn RuntimeBackend>,
+    backends: Backends,
     host: String,
     port: u16,
 ) -> Result<(SharedState, watch::Receiver<bool>)> {
-    let manager = ModelManager::new(paths.clone(), config.clone(), backend)?;
+    let manager = ModelManager::new(paths.clone(), config.clone(), backends)?;
     Ok(AppState::new(config, paths, hardware, manager, host, port))
 }
 
@@ -79,11 +80,17 @@ pub async fn serve(opts: ServeOptions) -> Result<()> {
             .unwrap_or_default()
     );
 
-    let backend: Arc<dyn RuntimeBackend> = Arc::new(LlamaCppBackend::new(
+    let llm: Arc<dyn RuntimeBackend> = Arc::new(LlamaCppBackend::new(
         config.backend.llamacpp.clone(),
         &paths.runtimes_dir(),
         hardware.clone(),
     ));
+    let whisper: Arc<dyn RuntimeBackend> = Arc::new(WhisperBackend::new(
+        config.backend.whisper.clone(),
+        &paths.runtimes_dir(),
+        hardware.clone(),
+    ));
+    let backends = Backends::new(llm, Some(whisper));
 
     let bind_host = config.daemon.host.clone();
     let listener = TcpListener::bind((bind_host.as_str(), config.daemon.port))
@@ -100,7 +107,7 @@ pub async fn serve(opts: ServeOptions) -> Result<()> {
         paths.clone(),
         config,
         hardware,
-        backend,
+        backends,
         addr.ip().to_string(),
         addr.port(),
     )?;

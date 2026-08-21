@@ -1,18 +1,14 @@
-//! ohmygpu_runtime_llamacpp — the v0.1 inference backend.
+//! ohmygpu_runtime_whisper — the speech-to-text backend: a supervised
+//! `whisper-server` (whisper.cpp) per running whisper model.
 //!
-//! OhMyGPU does not link llama.cpp. It supervises the upstream `llama-server`
-//! binary as a child process (one per running model, bound to
-//! `127.0.0.1:<ephemeral port>`) and talks to it over HTTP. That gives process
-//! isolation, upstream chat templates + tool-call parsing, and prebuilt
-//! Metal/CUDA/Vulkan binaries — everything an application developer should
-//! never have to think about.
-//!
-//! * [`install`] — find or download the binary
-//! * [`process`] — spawn / supervise / stop
-//! * [`wire`]    — internal model ⇄ llama-server JSON
+//! * `install.rs` — find or install the binary (official Linux/Windows assets;
+//!   our own macOS builds from the OhMyGPU release)
+//! * `wire.rs`    — internal `TranscriptionRequest` ⇄ `/inference` multipart + JSON
+//! * this file    — [`WhisperBackend`] / [`WhisperInstance`] behind the common
+//!   `RuntimeBackend` / `ModelInstance` contract. Chat/Responses calls on a
+//!   whisper model answer `Unsupported`.
 
 pub mod install;
-pub mod process;
 pub mod wire;
 
 use std::path::PathBuf;
@@ -21,35 +17,34 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use futures_util::StreamExt;
-use ohmygpu_core::config::LlamaCppConfig;
+use ohmygpu_core::config::WhisperConfig;
 use ohmygpu_core::hardware::HardwareInfo;
 use ohmygpu_inference::{
-    ContentPart, InferenceError, InferenceRequest, InferenceStream, InputItem,
+    InferenceError, InferenceRequest, InferenceStream, ModelKind, TranscriptionRequest,
+    TranscriptionResponse,
 };
 use ohmygpu_runtime_api::{
     BackendAvailability, InstanceInfo, InstanceStatus, ModelInstance, ProgressFn, RuntimeBackend,
     RuntimeError, StartSpec,
 };
+use ohmygpu_runtime_common::process::{free_port, ServerProcess};
 use tokio::sync::Mutex;
 
 use install::{Installer, LocatedBinary, Locator};
-use process::ServerProcess;
 
-pub const BACKEND_ID: &str = "llamacpp";
+pub const BACKEND_ID: &str = "whisper";
 
-pub struct LlamaCppBackend {
-    config: LlamaCppConfig,
+pub struct WhisperBackend {
+    config: WhisperConfig,
     hardware: HardwareInfo,
     managed_root: PathBuf,
-    /// Cached binary location (cleared if the file disappears).
     located: Mutex<Option<LocatedBinary>>,
     http: reqwest::Client,
 }
 
-impl LlamaCppBackend {
+impl WhisperBackend {
     pub fn new(
-        config: LlamaCppConfig,
+        config: WhisperConfig,
         runtimes_dir: &std::path::Path,
         hardware: HardwareInfo,
     ) -> Self {
@@ -95,7 +90,7 @@ impl LlamaCppBackend {
                 available: true,
                 version: l.version.clone(),
                 path: Some(l.path.clone()),
-                message: Some(format!("llama-server ({:?})", l.source).to_lowercase()),
+                message: Some(format!("whisper-server ({:?})", l.source).to_lowercase()),
             },
             None => BackendAvailability {
                 available: false,
@@ -106,13 +101,14 @@ impl LlamaCppBackend {
         }
     }
 
-    /// Wait until `GET /health` answers 200, the process exits, or we time out.
+    /// whisper-server loads the model before it listens, so "answers HTTP at
+    /// all" means ready.
     async fn wait_ready(
         &self,
         proc: &ServerProcess,
         timeout: Duration,
     ) -> Result<(), RuntimeError> {
-        let url = format!("http://127.0.0.1:{}/health", proc.port);
+        let url = format!("http://127.0.0.1:{}/", proc.port);
         let start = Instant::now();
         loop {
             if let Some(exit) = proc.has_exited() {
@@ -125,21 +121,20 @@ impl LlamaCppBackend {
             if start.elapsed() > timeout {
                 proc.stop(Duration::from_secs(5)).await;
                 return Err(RuntimeError::Start(format!(
-                    "model did not become ready within {}s{}",
+                    "whisper-server did not become ready within {}s{}",
                     timeout.as_secs(),
                     proc.log_tail()
                 )));
             }
-            if let Ok(resp) = self
+            if self
                 .http
                 .get(&url)
                 .timeout(Duration::from_secs(2))
                 .send()
                 .await
+                .is_ok()
             {
-                if resp.status().is_success() {
-                    return Ok(());
-                }
+                return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -147,7 +142,7 @@ impl LlamaCppBackend {
 }
 
 #[async_trait]
-impl RuntimeBackend for LlamaCppBackend {
+impl RuntimeBackend for WhisperBackend {
     fn id(&self) -> &'static str {
         BACKEND_ID
     }
@@ -156,9 +151,10 @@ impl RuntimeBackend for LlamaCppBackend {
         let located = self.locate().await;
         let msg = if located.is_none() {
             Some(if self.config.auto_install {
-                "llama-server not found; it will be downloaded on first model start".to_string()
+                "whisper-server not found; it will be downloaded on first speech model start"
+                    .to_string()
             } else {
-                "llama-server not found and auto_install is off; set backend.llamacpp.server_path"
+                "whisper-server not found and auto_install is off; set backend.whisper.server_path"
                     .to_string()
             })
         } else {
@@ -176,7 +172,7 @@ impl RuntimeBackend for LlamaCppBackend {
         }
         if !self.config.auto_install {
             return Err(RuntimeError::NotAvailable(
-                "llama-server not found and backend.llamacpp.auto_install is false".into(),
+                "whisper-server not found and backend.whisper.auto_install is false".into(),
             ));
         }
         let installer = Installer {
@@ -190,13 +186,19 @@ impl RuntimeBackend for LlamaCppBackend {
     }
 
     async fn start(&self, spec: StartSpec) -> Result<Arc<dyn ModelInstance>, RuntimeError> {
+        if spec.kind != ModelKind::Whisper {
+            return Err(RuntimeError::Start(format!(
+                "the whisper backend only runs speech models (got a {} model)",
+                spec.kind.as_str()
+            )));
+        }
         let located = match self.locate().await {
             Some(l) => l,
             None => {
                 self.prepare(None).await?;
                 self.locate()
                     .await
-                    .ok_or_else(|| RuntimeError::NotAvailable("llama-server not found".into()))?
+                    .ok_or_else(|| RuntimeError::NotAvailable("whisper-server not found".into()))?
             }
         };
         if !spec.model_path.is_file() {
@@ -205,24 +207,34 @@ impl RuntimeBackend for LlamaCppBackend {
                 spec.model_path.display()
             )));
         }
-        let mut spec = spec;
-        if spec.context_length.is_none() && self.config.context_length > 0 {
-            spec.context_length = Some(self.config.context_length);
+        let threads = spec.threads.or(self.config.threads);
+        let port = free_port().await?;
+        let mut args: Vec<String> = vec![
+            "-m".into(),
+            spec.model_path.display().to_string(),
+            "--host".into(),
+            "127.0.0.1".into(),
+            "--port".into(),
+            port.to_string(),
+            "-l".into(),
+            "auto".into(),
+        ];
+        if let Some(t) = threads {
+            args.push("-t".into());
+            args.push(t.to_string());
         }
-        if spec.gpu_layers.is_none() {
-            spec.gpu_layers = self.config.gpu_layers;
-        }
-        if spec.threads.is_none() {
-            spec.threads = self.config.threads;
-        }
-
-        let port = process::free_port().await?;
-        let proc = process::spawn(&located.path, &spec, port)?;
+        let proc = ServerProcess::spawn(
+            "whisper-server",
+            &spec.model_id,
+            &located.path,
+            &args,
+            port,
+            |model, line| tracing::debug!(target: "whisper", model = %model, "{line}"),
+        )?;
         let timeout = Duration::from_secs(self.config.startup_timeout_secs.max(5));
         self.wait_ready(&proc, timeout).await?;
-        tracing::info!(model = %spec.model_id, port, pid = ?proc.pid, "model ready");
-
-        Ok(Arc::new(LlamaCppInstance {
+        tracing::info!(model = %spec.model_id, port, pid = ?proc.pid, "speech model ready");
+        Ok(Arc::new(WhisperInstance {
             model_id: spec.model_id,
             proc,
             http: self.http.clone(),
@@ -232,7 +244,7 @@ impl RuntimeBackend for LlamaCppBackend {
     }
 }
 
-pub struct LlamaCppInstance {
+pub struct WhisperInstance {
     model_id: String,
     proc: ServerProcess,
     http: reqwest::Client,
@@ -240,14 +252,8 @@ pub struct LlamaCppInstance {
     stopping: AtomicBool,
 }
 
-impl LlamaCppInstance {
-    fn base_url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.proc.port)
-    }
-}
-
 #[async_trait]
-impl ModelInstance for LlamaCppInstance {
+impl ModelInstance for WhisperInstance {
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -269,71 +275,45 @@ impl ModelInstance for LlamaCppInstance {
         &self,
         request: InferenceRequest,
     ) -> Result<InferenceStream, InferenceError> {
+        Err(InferenceError::Unsupported(format!(
+            "model '{}' is a speech-to-text model; use POST /v1/audio/transcriptions",
+            request.model
+        )))
+    }
+
+    async fn transcribe(
+        &self,
+        request: TranscriptionRequest,
+    ) -> Result<TranscriptionResponse, InferenceError> {
+        request.validate()?;
         if let Some(InstanceStatus::Exited { message, .. }) = self.proc.has_exited() {
             return Err(InferenceError::Unavailable(message));
         }
-        // Remote images are inlined by the daemon; never let llama-server fetch URLs.
-        for item in &request.input {
-            if let InputItem::Message { content, .. } = item {
-                for part in content {
-                    if let ContentPart::Image { url } = part {
-                        if !url.starts_with("data:") {
-                            return Err(InferenceError::InvalidRequest(
-                                "image URLs must be inlined as data: URLs before inference".into(),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-        let body = wire::build_request(&request);
-        let url = format!("{}/v1/chat/completions", self.base_url());
-        let resp =
-            self.http.post(&url).json(&body).send().await.map_err(|e| {
-                InferenceError::Unavailable(format!("cannot reach llama-server: {e}"))
+        let url = format!("http://127.0.0.1:{}/inference", self.proc.port);
+        let form = wire::build_form(&request);
+        let resp = self
+            .http
+            .post(&url)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| {
+                InferenceError::Unavailable(format!("cannot reach whisper-server: {e}"))
             })?;
-
         let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            let message = serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .and_then(|v| v.get("error").map(wire::error_message))
-                .unwrap_or(text);
+            let message = wire::error_message(&text);
             return Err(if status.as_u16() == 400 {
                 InferenceError::InvalidRequest(message)
             } else {
-                InferenceError::Backend(format!("llama-server returned {status}: {message}"))
+                InferenceError::Backend(format!("whisper-server returned {status}: {message}"))
             });
         }
-
-        let mut bytes = resp.bytes_stream();
-        let stream = async_stream::try_stream! {
-            let mut parser = wire::StreamParser::new();
-            let mut buf = String::new();
-            while let Some(chunk) = bytes.next().await {
-                let chunk = chunk.map_err(|e| InferenceError::Unavailable(format!("stream interrupted: {e}")))?;
-                buf.push_str(&String::from_utf8_lossy(&chunk));
-                // Process complete lines; keep the remainder.
-                while let Some(pos) = buf.find('\n') {
-                    let line = buf[..pos].trim_end_matches('\r').to_string();
-                    buf.drain(..=pos);
-                    if let Some(data) = line.strip_prefix("data:") {
-                        for ev in parser.feed(data)? {
-                            yield ev;
-                        }
-                    }
-                }
-                if parser.is_completed() { break; }
-            }
-            if !parser.is_completed() {
-                if let Some(data) = buf.trim().strip_prefix("data:") {
-                    for ev in parser.feed(data)? { yield ev; }
-                }
-                for ev in parser.finish() { yield ev; }
-            }
-        };
-        Ok(Box::pin(stream))
+        let body: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            InferenceError::Backend(format!("whisper-server returned non-JSON: {e}"))
+        })?;
+        wire::parse_response(&request.model, &request.audio, &body)
     }
 
     async fn wait(&self) -> InstanceStatus {
@@ -342,8 +322,7 @@ impl ModelInstance for LlamaCppInstance {
 
     async fn stop(&self) -> Result<(), RuntimeError> {
         if self.stopping.swap(true, Ordering::SeqCst) {
-            // Another stop in flight; just wait for it.
-            let _ = tokio::time::timeout(Duration::from_secs(15), self.proc.wait()).await;
+            self.proc.wait().await;
             return Ok(());
         }
         self.proc.stop(Duration::from_secs(10)).await;

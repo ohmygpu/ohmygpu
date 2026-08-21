@@ -134,6 +134,7 @@ impl From<InferenceError> for ApiError {
             )
             .with_param("model"),
             InferenceError::InvalidRequest(m) => ApiError::new(StatusCode::BAD_REQUEST, "invalid_request_error", code, m),
+            InferenceError::Unsupported(m) => ApiError::new(StatusCode::BAD_REQUEST, "invalid_request_error", code, m),
             InferenceError::Backend(m) => ApiError::new(StatusCode::BAD_GATEWAY, "server_error", code, m),
             InferenceError::Unavailable(m) => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "server_error", code, m),
         }

@@ -16,6 +16,38 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
+// Model kinds
+// ---------------------------------------------------------------------------
+
+/// What a model does — decides which backend runs it and which API serves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    /// Text (and, for vision models, images) in, text out:
+    /// `/v1/responses`, `/v1/chat/completions`.
+    #[default]
+    Llm,
+    /// Speech to text: `/v1/audio/transcriptions`.
+    Whisper,
+}
+
+impl ModelKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ModelKind::Llm => "llm",
+            ModelKind::Whisper => "whisper",
+        }
+    }
+    /// Weight file format this kind of model uses.
+    pub fn format(&self) -> &'static str {
+        match self {
+            ModelKind::Llm => "gguf",
+            ModelKind::Whisper => "ggml",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Request side
 // ---------------------------------------------------------------------------
 
@@ -259,6 +291,87 @@ impl InferenceRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Speech to text
+// ---------------------------------------------------------------------------
+
+/// Decoded mono audio. Protocol adapters decode whatever the client uploaded
+/// (wav/mp3/m4a/flac/ogg…) and resample, so runtime adapters only ever see
+/// plain PCM — 16 kHz for whisper.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioInput {
+    pub sample_rate: u32,
+    pub samples: Vec<f32>,
+}
+
+impl AudioInput {
+    pub fn duration_secs(&self) -> f32 {
+        if self.sample_rate == 0 {
+            0.0
+        } else {
+            self.samples.len() as f32 / self.sample_rate as f32
+        }
+    }
+}
+
+/// One transcription request (`POST /v1/audio/transcriptions`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptionRequest {
+    pub model: String,
+    pub audio: AudioInput,
+    /// ISO-639-1 code (`en`, `zh`, …). `None` = auto-detect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Initial prompt (vocabulary hints, style).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    /// Translate to English instead of transcribing.
+    #[serde(default)]
+    pub translate: bool,
+}
+
+impl TranscriptionRequest {
+    pub fn validate(&self) -> Result<(), InferenceError> {
+        if self.model.trim().is_empty() {
+            return Err(InferenceError::InvalidRequest("`model` is required".into()));
+        }
+        if self.audio.sample_rate == 0 || self.audio.samples.is_empty() {
+            return Err(InferenceError::InvalidRequest("audio is empty".into()));
+        }
+        if let Some(t) = self.temperature {
+            if !(0.0..=1.0).contains(&t) {
+                return Err(InferenceError::InvalidRequest(
+                    "temperature must be between 0 and 1".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A timed piece of the transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptionSegment {
+    pub id: u32,
+    pub start_secs: f32,
+    pub end_secs: f32,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptionResponse {
+    pub model: String,
+    pub text: String,
+    /// Detected or requested language (ISO-639-1 where the backend provides it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    pub duration_secs: f32,
+    #[serde(default)]
+    pub segments: Vec<TranscriptionSegment>,
+}
+
+// ---------------------------------------------------------------------------
 // Response side
 // ---------------------------------------------------------------------------
 
@@ -462,9 +575,12 @@ pub enum InferenceError {
     /// The model exists but is not running; `state` is the lifecycle state name.
     #[error("model '{model}' is not running (state: {state})")]
     ModelNotRunning { model: String, state: String },
-    /// The request is malformed or asks for something unsupported.
+    /// The request is malformed.
     #[error("{0}")]
     InvalidRequest(String),
+    /// The model cannot do what was asked (e.g. chat with a speech model).
+    #[error("{0}")]
+    Unsupported(String),
     /// The backend failed while serving the request.
     #[error("backend error: {0}")]
     Backend(String),
@@ -480,6 +596,7 @@ impl InferenceError {
             InferenceError::ModelNotFound(_) => "model_not_found",
             InferenceError::ModelNotRunning { .. } => "model_not_running",
             InferenceError::InvalidRequest(_) => "invalid_request",
+            InferenceError::Unsupported(_) => "unsupported",
             InferenceError::Backend(_) => "backend_error",
             InferenceError::Unavailable(_) => "backend_unavailable",
         }

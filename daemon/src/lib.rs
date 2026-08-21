@@ -12,6 +12,7 @@
 //! [`serve`] function in-process.
 
 pub mod api;
+pub mod audio;
 pub mod error;
 pub mod manager;
 pub mod server;

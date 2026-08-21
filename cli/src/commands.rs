@@ -67,13 +67,23 @@ pub async fn status(client: &Client, json: bool) -> Result<()> {
         v["port"]
     );
     println!("Data dir:  {}", v["data_dir"].as_str().unwrap_or("?"));
-    let b = &v["backend"];
-    let avail = if b["available"].as_bool().unwrap_or(false) {
-        format!("available ({})", b["version"].as_str().unwrap_or("?"))
-    } else {
-        format!("not available — {}", b["message"].as_str().unwrap_or(""))
+    let backends: Vec<Value> = match v["backends"].as_array() {
+        Some(list) if !list.is_empty() => list.clone(),
+        _ => vec![v["backend"].clone()],
     };
-    println!("Backend:   {} — {}", b["id"].as_str().unwrap_or("?"), avail);
+    for (i, b) in backends.iter().enumerate() {
+        let avail = if b["available"].as_bool().unwrap_or(false) {
+            format!("available ({})", b["version"].as_str().unwrap_or("?"))
+        } else {
+            format!("not available — {}", b["message"].as_str().unwrap_or(""))
+        };
+        println!(
+            "{:<11}{} — {}",
+            if i == 0 { "Backends:" } else { "" },
+            b["id"].as_str().unwrap_or("?"),
+            avail
+        );
+    }
     println!(
         "Hardware:  {}",
         v["hardware_backend"].as_str().unwrap_or("?")
@@ -177,13 +187,14 @@ pub async fn model_list(client: &Client, paths: &Paths, json: bool) -> Result<()
         return Ok(());
     }
     println!(
-        "{:<28} {:<12} {:>9}  {:<6} {:<7} NAME",
-        "ID", "STATE", "SIZE", "TOOLS", "VISION"
+        "{:<28} {:<8} {:<12} {:>9}  {:<6} {:<7} NAME",
+        "ID", "KIND", "STATE", "SIZE", "TOOLS", "VISION"
     );
     for m in &models {
         println!(
-            "{:<28} {:<12} {:>9}  {:<6} {:<7} {}",
+            "{:<28} {:<8} {:<12} {:>9}  {:<6} {:<7} {}",
             m["id"].as_str().unwrap_or("?"),
+            m["kind"].as_str().unwrap_or("llm"),
             m["state"].as_str().unwrap_or("?"),
             m["size_bytes"]
                 .as_u64()
@@ -227,16 +238,17 @@ pub async fn model_catalog(client: &Client, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28} {:>9}  {:<6} {:<7} {:<14} NAME",
-        "ID", "SIZE", "TOOLS", "VISION", "STATE"
+        "{:<28} {:<8} {:>9}  {:<6} {:<7} {:<14} NAME",
+        "ID", "KIND", "SIZE", "TOOLS", "VISION", "STATE"
     );
     for m in &models {
         let size = m["size_bytes_approx"]
             .as_u64()
             .map(|s| s + m["mmproj_size_bytes_approx"].as_u64().unwrap_or(0));
         println!(
-            "{:<28} {:>9}  {:<6} {:<7} {:<14} {}",
+            "{:<28} {:<8} {:>9}  {:<6} {:<7} {:<14} {}",
             m["id"].as_str().unwrap_or("?"),
+            m["kind"].as_str().unwrap_or("llm"),
             size.map(human_bytes).unwrap_or_else(|| "?".into()),
             yes_no(m["tools"].as_bool().unwrap_or(false)),
             yes_no(m["mmproj_file"].is_string()),
@@ -245,7 +257,7 @@ pub async fn model_catalog(client: &Client, json: bool) -> Result<()> {
         );
     }
     println!();
-    println!("Pull with: omg model pull <ID>   (advanced: hf:owner/repo/file.gguf or a direct .gguf URL)");
+    println!("Pull with: omg model pull <ID>   (advanced: hf:owner/repo/file.gguf, hf:owner/repo/ggml-x.bin, or a direct URL)");
     Ok(())
 }
 
@@ -254,6 +266,7 @@ pub async fn model_pull(
     model: &str,
     id: Option<&str>,
     mmproj: Option<&str>,
+    kind: Option<&str>,
     json: bool,
 ) -> Result<()> {
     let mut body = json!({ "model": model });
@@ -262,6 +275,9 @@ pub async fn model_pull(
     }
     if let Some(mmproj) = mmproj {
         body["mmproj"] = json!(mmproj);
+    }
+    if let Some(kind) = kind {
+        body["kind"] = json!(kind);
     }
     let v = client.post("/ohmygpu/v1/models/pull", Some(body)).await?;
     let m = &v["model"];

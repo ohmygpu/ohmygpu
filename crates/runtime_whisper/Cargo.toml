@@ -1,6 +1,6 @@
 [package]
-name = "ohmygpu_runtime_llamacpp"
-description = "OhMyGPU runtime adapter that supervises llama.cpp's llama-server as a subprocess"
+name = "ohmygpu_runtime_whisper"
+description = "OhMyGPU runtime adapter that supervises whisper.cpp's whisper-server for speech-to-text"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,19 +11,9 @@ ohmygpu_inference.workspace = true
 ohmygpu_runtime_api.workspace = true
 ohmygpu_runtime_common.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
-futures-util.workspace = true
-async-stream.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-uuid.workspace = true
-bytes.workspace = true
-tempfile.workspace = true
-
-
-[dev-dependencies]
-axum.workspace = true

@@ -166,7 +166,18 @@ Not supported (400): `previous_response_id`, `background`, hosted tools (web sea
 
 Not supported (400): `n > 1`, audio content parts, non-text `response_format`. Ignored: `logprobs`, `user`, `parallel_tool_calls`, `image_url.detail`.
 
-**`GET /v1/models`**, **`GET /v1/models/{id}`** — installed models, OpenAI list shape (`created` = install time, extra `state` field).
+**`POST /v1/audio/transcriptions`** — speech to text (whisper.cpp models, `kind: whisper`).
+
+| Supported | Notes |
+|-----------|-------|
+| `file` (multipart), `model` | wav, mp3, m4a/aac, flac, ogg-vorbis — decoded and resampled by the runtime (no ffmpeg); ≤ 50 MB; opus/webm not yet |
+| `language` (ISO-639-1; default auto-detect), `prompt`, `temperature` | |
+| `response_format` | `json` (default, `{"text": …}`), `text`, `verbose_json` (`task`, `language`, `duration`, `text`, `segments[{id,start,end,text}]`), `srt`, `vtt` |
+| `timestamp_granularities[]` | `segment` only (`word` → 400) |
+
+Not supported (400): `stream`, word timestamps, `/v1/audio/translations`. A chat/responses request to a whisper model, or a transcription request to an LLM, answers `400 unsupported`.
+
+**`GET /v1/models`**, **`GET /v1/models/{id}`** — installed models, OpenAI list shape (`created` = install time, extra `state` and `kind` fields).
 
 **`POST /v1/completions`** (legacy) is intentionally not implemented.
 
@@ -193,11 +204,11 @@ By default a request for a stopped model is a `409`; set `inference.auto_start =
 | `GET  /ohmygpu/v1/health` | liveness (`{"status":"ok","version":…}`); also `GET /health` |
 | `GET  /ohmygpu/v1/status` | version, uptime, pid, bind address, data dir, backend availability, installed/running/downloading models |
 | `GET  /ohmygpu/v1/hardware` | platform, architecture, CPU, system memory, GPU (vendor, name, memory) and the acceleration backend (`metal` / `cuda` / `vulkan` / `cpu`) |
-| `GET  /ohmygpu/v1/backend`, `POST /ohmygpu/v1/backend/install` | llama.cpp availability; install it now instead of on first start |
+| `GET  /ohmygpu/v1/backend`, `POST /ohmygpu/v1/backend/install[?backend=whisper]` | backend availability (`backends`: llama.cpp, whisper.cpp); install one now instead of on first start |
 | `GET  /ohmygpu/v1/catalog` | curated supported models with `installed`/`state` |
 | `GET  /ohmygpu/v1/models[?installed=true]` | all known models with lifecycle state |
 | `GET  /ohmygpu/v1/models/{id}` | one model: `state`, `download` progress, `message` (while starting), `error`, `runtime` (backend, pid, port) |
-| `POST /ohmygpu/v1/models/pull` `{"model": "<catalog id \| hf:owner/repo/file.gguf \| https://…/file.gguf>", "id"?: "…", "mmproj"?: "<projector .gguf in the same repo, or URL>"}` | 202 downloading (idempotent); `mmproj` turns a non-catalog model into a vision model (can be added to an installed model later) |
+| `POST /ohmygpu/v1/models/pull` `{"model": "<catalog id \| hf:owner/repo/file.gguf \| hf:owner/repo/ggml-x.bin \| https://…>", "id"?: "…", "mmproj"?: "<projector .gguf>", "kind"?: "llm\|whisper"}` | 202 downloading (idempotent); `mmproj` turns a non-catalog model into a vision model (can be added to an installed model later); `kind` is inferred from the file name (`*.gguf` → llm, `ggml-*.bin` → whisper) unless given |
 | `DELETE /ohmygpu/v1/models/{id}` | stop if needed, delete files, forget |
 | `POST /ohmygpu/v1/models/{id}/start[?wait=true&timeout=600]` `{"context_length"?, "gpu_layers"?, "threads"?}` | 202 starting, or with `wait` 200 running / 502 error |
 | `POST /ohmygpu/v1/models/{id}/stop` | 200 stopped |
@@ -231,13 +242,21 @@ curl http://127.0.0.1:10692/v1/chat/completions -H 'Content-Type: application/js
 
 Text, tool calls and images all go through the same pipeline; images are only inlined (base64) by the time they reach llama.cpp — the runtime fetches http(s) URLs itself and never lets the backend fetch anything.
 
+**Speech to text** uses whisper.cpp through the same lifecycle: the catalog has `whisper-tiny` (smoke tests), `whisper-base`, `whisper-small` and `whisper-large-v3-turbo` (all multilingual); any other ggml whisper model can be pulled with `hf:owner/repo/ggml-x.bin`. The first start downloads `whisper-server` (official whisper.cpp builds on Linux/Windows; on macOS the Metal build shipped with the OhMyGPU release of the running version).
+
+```bash
+omg model pull whisper-base && omg run whisper-base
+curl http://127.0.0.1:10692/v1/audio/transcriptions \
+  -F file=@meeting.mp3 -F model=whisper-base -F language=zh -F response_format=verbose_json
+```
+
 ## CLI
 
 ```text
 omg serve [--host H] [--port P]        run the runtime in the foreground
 omg status                              runtime + backend + models summary
 omg hardware                            detected hardware
-omg model list | catalog | pull <ref> [--id X] [--mmproj FILE] | rm <id> | info <id>
+omg model list | catalog | pull <ref> [--id X] [--mmproj FILE] [--kind llm|whisper] | rm <id> | info <id>
 omg run <id> [--context-length N] [--gpu-layers N] [--threads N]
 omg stop <id>
 omg shutdown
@@ -251,7 +270,7 @@ Every command except `serve`/`config` uses the Management API; add `--json` for 
 Everything lives under one directory — `~/.config/ohmygpu` by default, or `$OHMYGPU_HOME` / `--data-dir` (so a bundling application can give the runtime a private data dir):
 
 ```text
-config.toml, registry.json, models/<id>/*.gguf, runtimes/llamacpp/<tag>/, daemon.json
+config.toml, registry.json, models/<id>/*.gguf|*.bin (+ mmproj), runtimes/llamacpp/<tag>/, runtimes/whisper/<tag>/, daemon.json
 ```
 
 ```toml
@@ -272,7 +291,7 @@ context_length = 8192
 startup_timeout_secs = 600
 ```
 
-Environment overrides: `OHMYGPU_HOME`, `OHMYGPU_HOST`, `OHMYGPU_PORT`, `OHMYGPU_LLAMA_SERVER`, `HF_TOKEN`, `OHMYGPU_LOG` (e.g. `info,llamacpp=debug` to see llama.cpp's own logs).
+Environment overrides: `OHMYGPU_HOME`, `OHMYGPU_HOST`, `OHMYGPU_PORT`, `OHMYGPU_LLAMA_SERVER`, `OHMYGPU_WHISPER_SERVER`, `HF_TOKEN`, `OHMYGPU_LOG` (e.g. `info,llamacpp=debug,whisper=debug` to see the engines' own logs).
 
 Managed llama.cpp downloads cover macOS arm64/x64 (Metal), Linux x64/arm64 (CPU, or Vulkan when a GPU is detected), Windows x64 (CPU/Vulkan). For CUDA on Linux, point `server_path` at your own llama.cpp build.
 

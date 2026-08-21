@@ -81,6 +81,42 @@ pub struct InferenceConfig {
 #[serde(default)]
 pub struct BackendConfig {
     pub llamacpp: LlamaCppConfig,
+    pub whisper: WhisperConfig,
+}
+
+/// whisper.cpp release the runtime installs by default (Linux/Windows: the
+/// official assets of that tag; macOS: `whisper-server` built by our release
+/// workflow for the same tag).
+pub const WHISPER_DEFAULT_RELEASE: &str = "b4938";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WhisperConfig {
+    /// Explicit `whisper-server` binary. When unset the daemon looks at
+    /// `OHMYGPU_WHISPER_SERVER`, the managed install dir, then `PATH`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_path: Option<PathBuf>,
+    /// Download a release into `<base>/runtimes/whisper/` if no binary is found.
+    pub auto_install: bool,
+    /// whisper.cpp release tag to install (pinned; see `WHISPER_DEFAULT_RELEASE`).
+    pub release: String,
+    /// CPU threads for transcription (`None` = whisper.cpp default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threads: Option<u32>,
+    /// How long to wait for the server to load the model before failing the start.
+    pub startup_timeout_secs: u64,
+}
+
+impl Default for WhisperConfig {
+    fn default() -> Self {
+        Self {
+            server_path: None,
+            auto_install: true,
+            release: WHISPER_DEFAULT_RELEASE.to_string(),
+            threads: None,
+            startup_timeout_secs: 300,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -152,7 +188,7 @@ impl Config {
     }
 
     /// Environment overrides: `OHMYGPU_HOST`, `OHMYGPU_PORT`,
-    /// `OHMYGPU_LLAMA_SERVER`, `HF_TOKEN`.
+    /// `OHMYGPU_LLAMA_SERVER`, `OHMYGPU_WHISPER_SERVER`, `HF_TOKEN`.
     pub fn apply_env(&mut self) {
         if let Some(h) = env_nonempty("OHMYGPU_HOST") {
             self.daemon.host = h;
@@ -162,6 +198,9 @@ impl Config {
         }
         if let Some(p) = env_nonempty("OHMYGPU_LLAMA_SERVER") {
             self.backend.llamacpp.server_path = Some(PathBuf::from(p));
+        }
+        if let Some(p) = env_nonempty("OHMYGPU_WHISPER_SERVER") {
+            self.backend.whisper.server_path = Some(PathBuf::from(p));
         }
         if let Some(t) = env_nonempty("HF_TOKEN") {
             self.models.hf_token = Some(t);

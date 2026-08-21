@@ -19,6 +19,8 @@ pub struct ModelObject {
     /// OhMyGPU extension: lifecycle state, so OpenAI clients can tell whether a
     /// model is running without a second call.
     pub state: String,
+    /// OhMyGPU extension: `llm` or `whisper`.
+    pub kind: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +39,7 @@ fn to_object(m: ModelView) -> ModelObject {
             .unwrap_or_else(now_secs),
         owned_by: "ohmygpu",
         state: m.state,
+        kind: m.kind.as_str().to_string(),
     }
 }
 

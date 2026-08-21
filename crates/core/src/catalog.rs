@@ -5,6 +5,7 @@
 //! projector file), all verified to load in llama.cpp. Power users can still pull any GGUF with an explicit reference
 //! (`hf:owner/repo/file.gguf`), but that path is "advanced" and unsupported.
 
+use ohmygpu_inference::ModelKind;
 use serde::{Deserialize, Serialize};
 
 use crate::registry::ModelSource;
@@ -30,6 +31,8 @@ pub struct CatalogEntry {
     pub mmproj_file: Option<&'static str>,
     /// Approximate projector size (0 when there is none).
     pub mmproj_size_bytes_approx: u64,
+    /// `llm` (GGUF, llama.cpp) or `whisper` (ggml, whisper.cpp).
+    pub kind: ModelKind,
 }
 
 const MB: u64 = 1_000_000;
@@ -48,6 +51,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: false,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "qwen2.5-0.5b-instruct",
@@ -60,6 +64,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: true,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "qwen2.5-1.5b-instruct",
@@ -72,6 +77,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: true,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "qwen2.5-3b-instruct",
@@ -84,6 +90,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: true,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "qwen2.5-7b-instruct",
@@ -96,6 +103,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: true,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "qwen3-4b-instruct",
@@ -108,6 +116,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: true,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "llama-3.2-1b-instruct",
@@ -120,6 +129,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: true,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "llama-3.2-3b-instruct",
@@ -132,6 +142,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: true,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "llama-3.1-8b-instruct",
@@ -144,6 +155,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: true,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "phi-4-mini-instruct",
@@ -156,6 +168,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: false,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "gemma-3-1b-it",
@@ -168,6 +181,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: false,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "gemma-3-4b-it",
@@ -180,6 +194,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: false,
         mmproj_file: Some("mmproj-model-f16.gguf"),
         mmproj_size_bytes_approx: 850 * MB,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "gemma-3-12b-it",
@@ -192,6 +207,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: false,
         mmproj_file: None,
         mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "qwen2.5-vl-3b-instruct",
@@ -204,6 +220,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: false,
         mmproj_file: Some("mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"),
         mmproj_size_bytes_approx: 840 * MB,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "qwen2.5-vl-7b-instruct",
@@ -216,6 +233,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: false,
         mmproj_file: Some("mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf"),
         mmproj_size_bytes_approx: 850 * MB,
+        kind: ModelKind::Llm,
     },
     CatalogEntry {
         id: "smolvlm-256m-instruct",
@@ -228,6 +246,60 @@ pub const CATALOG: &[CatalogEntry] = &[
         tools: false,
         mmproj_file: Some("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf"),
         mmproj_size_bytes_approx: 100 * MB,
+        kind: ModelKind::Llm,
+    },
+    // Speech to text (whisper.cpp ggml models; all multilingual).
+    CatalogEntry {
+        id: "whisper-tiny",
+        display_name: "Whisper tiny (multilingual; smoke tests)",
+        family: "whisper",
+        repo: "ggerganov/whisper.cpp",
+        file: "ggml-tiny.bin",
+        quantization: "f16",
+        size_bytes_approx: 78 * MB,
+        tools: false,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Whisper,
+    },
+    CatalogEntry {
+        id: "whisper-base",
+        display_name: "Whisper base (multilingual)",
+        family: "whisper",
+        repo: "ggerganov/whisper.cpp",
+        file: "ggml-base.bin",
+        quantization: "f16",
+        size_bytes_approx: 148 * MB,
+        tools: false,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Whisper,
+    },
+    CatalogEntry {
+        id: "whisper-small",
+        display_name: "Whisper small (multilingual)",
+        family: "whisper",
+        repo: "ggerganov/whisper.cpp",
+        file: "ggml-small.bin",
+        quantization: "f16",
+        size_bytes_approx: 488 * MB,
+        tools: false,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Whisper,
+    },
+    CatalogEntry {
+        id: "whisper-large-v3-turbo",
+        display_name: "Whisper large-v3-turbo (multilingual, q8_0)",
+        family: "whisper",
+        repo: "ggerganov/whisper.cpp",
+        file: "ggml-large-v3-turbo-q8_0.bin",
+        quantization: "q8_0",
+        size_bytes_approx: 874 * MB,
+        tools: false,
+        mmproj_file: None,
+        mmproj_size_bytes_approx: 0,
+        kind: ModelKind::Whisper,
     },
 ];
 
@@ -249,6 +321,9 @@ pub struct ModelRef {
     pub file: String,
     /// True when it came from the curated catalog.
     pub curated: bool,
+    /// `llm` or `whisper` — decides the backend, the API and the file format.
+    #[serde(default)]
+    pub kind: ModelKind,
     pub tools: bool,
     /// The model accepts image input once its projector is installed.
     #[serde(default)]
@@ -284,6 +359,17 @@ impl ModelRef {
     ///
     /// `id_override` names the installed model for non-catalog refs.
     pub fn parse(reference: &str, id_override: Option<&str>) -> Result<ModelRef, String> {
+        Self::parse_kind(reference, id_override, None)
+    }
+
+    /// Like [`parse`](Self::parse), with an explicit model kind for non-catalog
+    /// references. Without one the kind is inferred from the file name:
+    /// `*.gguf` → `llm`, `ggml-*.bin` → `whisper`.
+    pub fn parse_kind(
+        reference: &str,
+        id_override: Option<&str>,
+        kind: Option<ModelKind>,
+    ) -> Result<ModelRef, String> {
         let r = reference.trim();
         if r.is_empty() {
             return Err("model reference is empty".into());
@@ -298,6 +384,7 @@ impl ModelRef {
                 url: hf_url(entry.repo, entry.file),
                 file: entry.file.to_string(),
                 curated: true,
+                kind: entry.kind,
                 tools: entry.tools,
                 vision: entry.mmproj_file.is_some(),
                 display_name: entry.display_name.to_string(),
@@ -356,10 +443,29 @@ impl ModelRef {
             ));
         };
 
-        if !file.to_ascii_lowercase().ends_with(".gguf") {
-            return Err(format!(
-                "'{file}' is not a .gguf file; v0.1 supports GGUF models only"
-            ));
+        let lower = file.to_ascii_lowercase();
+        let base = lower.rsplit('/').next().unwrap_or(&lower).to_string();
+        let kind = match kind {
+            Some(k) => k,
+            None if base.ends_with(".gguf") => ModelKind::Llm,
+            None if base.starts_with("ggml-") && base.ends_with(".bin") => ModelKind::Whisper,
+            None => {
+                return Err(format!(
+                    "'{file}' is neither a .gguf (LLM) nor a ggml-*.bin (whisper) file; \
+                     pass the model kind explicitly if the name is unusual"
+                ))
+            }
+        };
+        match kind {
+            ModelKind::Llm if !base.ends_with(".gguf") => {
+                return Err(format!("'{file}' is not a .gguf file (LLMs are GGUF)"))
+            }
+            ModelKind::Whisper if !base.ends_with(".bin") => {
+                return Err(format!(
+                    "'{file}' is not a .bin file (whisper.cpp models are ggml .bin files)"
+                ))
+            }
+            _ => {}
         }
         let id = match id_override.map(str::trim).filter(|s| !s.is_empty()) {
             Some(id) => validate_id(id)?,
@@ -370,6 +476,7 @@ impl ModelRef {
             .next()
             .unwrap_or(&file)
             .trim_end_matches(".gguf")
+            .trim_end_matches(".bin")
             .to_string();
         Ok(ModelRef {
             id,
@@ -377,6 +484,7 @@ impl ModelRef {
             url,
             file,
             curated: false,
+            kind,
             tools: false,
             vision: false,
             display_name,
@@ -475,7 +583,9 @@ pub fn derive_id(file: &str) -> String {
         .next()
         .unwrap_or(file)
         .trim_end_matches(".gguf")
-        .trim_end_matches(".GGUF");
+        .trim_end_matches(".GGUF")
+        .trim_end_matches(".bin")
+        .trim_end_matches(".BIN");
     let mut out = String::with_capacity(stem.len());
     for c in stem.chars() {
         let c = c.to_ascii_lowercase();
@@ -505,7 +615,14 @@ mod tests {
         for e in CATALOG {
             assert!(validate_id(e.id).is_ok(), "{}", e.id);
             assert!(seen.insert(e.id), "duplicate id {}", e.id);
-            assert!(e.file.ends_with(".gguf"));
+            match e.kind {
+                ModelKind::Llm => assert!(e.file.ends_with(".gguf"), "{}", e.id),
+                ModelKind::Whisper => assert!(
+                    e.file.starts_with("ggml-") && e.file.ends_with(".bin"),
+                    "{}",
+                    e.id
+                ),
+            }
             assert!(e.repo.contains('/'));
         }
     }

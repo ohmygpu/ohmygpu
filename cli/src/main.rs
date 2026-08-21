@@ -95,6 +95,10 @@ enum ModelCommands {
         /// repo (mmproj-….gguf) or a full URL; lets the model accept images
         #[arg(long)]
         mmproj: Option<String>,
+        /// Model kind for non-catalog references: llm or whisper (inferred from
+        /// the file name when omitted: *.gguf → llm, ggml-*.bin → whisper)
+        #[arg(long, value_parser = ["llm", "whisper"])]
+        kind: Option<String>,
     },
     /// Remove an installed model (stops it first)
     #[command(alias = "rm")]
@@ -133,8 +137,21 @@ async fn main() -> Result<()> {
         Commands::Model { action } => match action {
             ModelCommands::List => commands::model_list(&client, &paths, json).await,
             ModelCommands::Catalog => commands::model_catalog(&client, json).await,
-            ModelCommands::Pull { model, id, mmproj } => {
-                commands::model_pull(&client, &model, id.as_deref(), mmproj.as_deref(), json).await
+            ModelCommands::Pull {
+                model,
+                id,
+                mmproj,
+                kind,
+            } => {
+                commands::model_pull(
+                    &client,
+                    &model,
+                    id.as_deref(),
+                    mmproj.as_deref(),
+                    kind.as_deref(),
+                    json,
+                )
+                .await
             }
             ModelCommands::Remove { model } => commands::model_remove(&client, &model).await,
             ModelCommands::Info { model } => commands::model_info(&client, &model).await,

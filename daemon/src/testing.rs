@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use ohmygpu_inference::{
-    FinishReason, InferenceError, InferenceRequest, InferenceStream, InputItem, Role, StreamEvent,
-    Usage,
+    FinishReason, InferenceError, InferenceRequest, InferenceStream, InputItem, ModelKind, Role,
+    StreamEvent, TranscriptionRequest, TranscriptionResponse, TranscriptionSegment, Usage,
 };
 use ohmygpu_runtime_api::{
     BackendAvailability, InstanceInfo, InstanceStatus, ModelInstance, ProgressFn, RuntimeBackend,
@@ -89,6 +89,7 @@ impl RuntimeBackend for MockBackend {
         let (exit_tx, exit_rx) = watch::channel(None);
         let inst = Arc::new(MockInstance {
             model_id: spec.model_id,
+            kind: spec.kind,
             spec_context: spec.context_length,
             spec_mmproj: spec.mmproj_path,
             exit_tx,
@@ -101,6 +102,7 @@ impl RuntimeBackend for MockBackend {
 
 pub struct MockInstance {
     pub model_id: String,
+    pub kind: ModelKind,
     pub spec_context: Option<u32>,
     /// Projector path the manager handed us (vision models).
     pub spec_mmproj: Option<std::path::PathBuf>,
@@ -161,6 +163,12 @@ impl ModelInstance for MockInstance {
         if let Some(InstanceStatus::Exited { message, .. }) = self.exit_rx.borrow().clone() {
             return Err(InferenceError::Unavailable(message));
         }
+        if self.kind == ModelKind::Whisper {
+            return Err(InferenceError::Unsupported(format!(
+                "model '{}' is a speech-to-text model; use POST /v1/audio/transcriptions",
+                request.model
+            )));
+        }
         let (text, images) = last_user_message(&request);
         let usage = Usage {
             input_tokens: request.input.len() as u32,
@@ -214,6 +222,37 @@ impl ModelInstance for MockInstance {
             }));
         }
         Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+
+    async fn transcribe(
+        &self,
+        request: TranscriptionRequest,
+    ) -> Result<TranscriptionResponse, InferenceError> {
+        if self.kind != ModelKind::Whisper {
+            return Err(InferenceError::Unsupported(format!(
+                "model '{}' does not transcribe audio (not a speech-to-text model)",
+                request.model
+            )));
+        }
+        request.validate()?;
+        let secs = request.audio.duration_secs();
+        let lang = request.language.clone().unwrap_or_else(|| "auto".into());
+        let text = format!(
+            "transcribed {secs:.1}s at {} Hz ({lang})",
+            request.audio.sample_rate
+        );
+        Ok(TranscriptionResponse {
+            model: request.model,
+            text: text.clone(),
+            language: Some(lang),
+            duration_secs: secs,
+            segments: vec![TranscriptionSegment {
+                id: 0,
+                start_secs: 0.0,
+                end_secs: secs,
+                text,
+            }],
+        })
     }
 
     async fn wait(&self) -> InstanceStatus {

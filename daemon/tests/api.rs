@@ -15,6 +15,7 @@ use ohmygpu_core::lifecycle::ModelState;
 use ohmygpu_core::paths::Paths;
 use ohmygpu_core::registry::{InstalledModel, ModelCapabilities, ModelRegistry, ModelSource};
 use ohmygpu_daemon::api::router;
+use ohmygpu_daemon::manager::Backends;
 use ohmygpu_daemon::server::build_state;
 use ohmygpu_daemon::state::SharedState;
 use ohmygpu_daemon::testing::MockBackend;
@@ -47,6 +48,7 @@ fn install_fake_model(paths: &Paths, id: &str) {
         format: "gguf".into(),
         path: file,
         mmproj_path: None,
+        kind: Default::default(),
         size_bytes: 15,
         installed_at: chrono::Utc::now(),
         capabilities: ModelCapabilities {
@@ -77,6 +79,7 @@ fn install_fake_vision_model(paths: &Paths, id: &str) {
         format: "gguf".into(),
         path: file,
         mmproj_path: Some(mmproj),
+        kind: Default::default(),
         size_bytes: 24,
         installed_at: chrono::Utc::now(),
         capabilities: ModelCapabilities {
@@ -105,7 +108,7 @@ async fn setup_full(config: Config, extra: impl FnOnce(&Paths)) -> TestApp {
         paths,
         config,
         HardwareInfo::detect(),
-        backend.clone(),
+        Backends::single(backend.clone()),
         "127.0.0.1".into(),
         10692,
     )
@@ -1233,4 +1236,406 @@ async fn pull_with_mmproj_downloads_both_files_and_adds_vision() {
         )
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+}
+
+// ---------------------------------------------------------------------------
+// Speech to text (whisper)
+// ---------------------------------------------------------------------------
+
+const WHISPER_MODEL: &str = "mock-whisper";
+
+/// A fake whisper model (ggml .bin, kind = whisper).
+fn install_fake_whisper_model(paths: &Paths, id: &str) {
+    let dir = paths.model_dir(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("ggml-tiny.bin");
+    std::fs::write(&file, b"ggml-not-really").unwrap();
+    let mut reg = ModelRegistry::load(paths.registry_path()).unwrap();
+    reg.add(InstalledModel {
+        id: id.into(),
+        display_name: "Mock Whisper".into(),
+        source: ModelSource::HuggingFace {
+            repo: "ggerganov/whisper.cpp".into(),
+            file: "ggml-tiny.bin".into(),
+        },
+        kind: ohmygpu_inference::ModelKind::Whisper,
+        format: "ggml".into(),
+        path: file,
+        mmproj_path: None,
+        size_bytes: 15,
+        installed_at: chrono::Utc::now(),
+        capabilities: ModelCapabilities::default(),
+        curated: false,
+    })
+    .unwrap();
+}
+
+/// 16-bit PCM mono WAV: `secs` of a 440 Hz tone at `rate`.
+fn tone_wav(rate: u32, secs: f32) -> Vec<u8> {
+    let frames = (rate as f32 * secs) as usize;
+    let data_len = (frames * 2) as u32;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for i in 0..frames {
+        let v = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / rate as f32).sin();
+        out.extend_from_slice(&((v * 20000.0) as i16).to_le_bytes());
+    }
+    out
+}
+
+/// Build a multipart/form-data body: `(content_type, body)`.
+fn multipart(fields: &[(&str, &str)], file: Option<(&str, &[u8], &str)>) -> (String, Vec<u8>) {
+    let b = "----ohmygpu-test-boundary";
+    let mut body = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(
+            format!("--{b}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
+                .as_bytes(),
+        );
+    }
+    if let Some((file_name, bytes, ct)) = file {
+        body.extend_from_slice(
+            format!("--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: {ct}\r\n\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{b}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={b}"), body)
+}
+
+impl TestApp {
+    async fn post_bytes(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> (StatusCode, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", content_type)
+            .body(Body::from(body))
+            .unwrap();
+        let resp = self.app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    async fn transcribe(
+        &self,
+        fields: &[(&str, &str)],
+        file: Option<(&str, &[u8], &str)>,
+    ) -> (StatusCode, String) {
+        let (ct, body) = multipart(fields, file);
+        self.post_bytes("/v1/audio/transcriptions", &ct, body).await
+    }
+}
+
+fn json_of(text: &str) -> Value {
+    serde_json::from_str(text).unwrap_or_else(|e| panic!("non-JSON body ({e}): {text}"))
+}
+
+#[tokio::test]
+async fn transcriptions_with_a_mock_whisper_model() {
+    let t = setup_full(Config::default(), |p| {
+        install_fake_whisper_model(p, WHISPER_MODEL)
+    })
+    .await;
+    let wav = tone_wav(16_000, 0.5);
+
+    // Not running yet → 409, like the text APIs.
+    let (s, body) = t
+        .transcribe(
+            &[("model", WHISPER_MODEL)],
+            Some(("a.wav", &wav, "audio/wav")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "model_not_running");
+
+    // Start it: the view says what kind it is.
+    let (s, v) = t
+        .json(
+            "POST",
+            &format!("/ohmygpu/v1/models/{WHISPER_MODEL}/start?wait=true"),
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["model"]["kind"], "whisper");
+    let (_, v) = t.json("GET", "/v1/models", None).await;
+    let me = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == WHISPER_MODEL)
+        .cloned()
+        .unwrap();
+    assert_eq!(me["kind"], "whisper");
+
+    // Chat on a speech model is refused.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({"model": WHISPER_MODEL, "messages": [{"role": "user", "content": "hi"}]})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error"]["code"], "unsupported");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("transcriptions"),
+        "{v}"
+    );
+
+    // json (default)
+    let (s, body) = t
+        .transcribe(
+            &[("model", WHISPER_MODEL)],
+            Some(("a.wav", &wav, "audio/wav")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    assert_eq!(
+        json_of(&body)["text"],
+        "transcribed 0.5s at 16000 Hz (auto)"
+    );
+
+    // language + verbose_json (+ a 44.1 kHz file that gets resampled)
+    let wav44 = tone_wav(44_100, 1.0);
+    let (s, body) = t
+        .transcribe(
+            &[
+                ("model", WHISPER_MODEL),
+                ("language", "zh"),
+                ("response_format", "verbose_json"),
+                ("temperature", "0.2"),
+                ("timestamp_granularities[]", "segment"),
+            ],
+            Some(("a.wav", &wav44, "audio/wav")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    let v = json_of(&body);
+    assert_eq!(v["task"], "transcribe");
+    assert_eq!(v["language"], "zh");
+    assert_eq!(v["text"], "transcribed 1.0s at 16000 Hz (zh)");
+    assert_eq!(v["segments"].as_array().unwrap().len(), 1);
+    assert_eq!(v["segments"][0]["end"], 1.0);
+
+    // text / srt / vtt
+    let (s, body) = t
+        .transcribe(
+            &[("model", WHISPER_MODEL), ("response_format", "text")],
+            Some(("a.wav", &wav, "audio/wav")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body, "transcribed 0.5s at 16000 Hz (auto)\n");
+    let (_, body) = t
+        .transcribe(
+            &[("model", WHISPER_MODEL), ("response_format", "srt")],
+            Some(("a.wav", &wav, "audio/wav")),
+        )
+        .await;
+    assert!(
+        body.starts_with("1\n00:00:00,000 --> 00:00:00,500\n"),
+        "{body}"
+    );
+    let (_, body) = t
+        .transcribe(
+            &[("model", WHISPER_MODEL), ("response_format", "vtt")],
+            Some(("a.wav", &wav, "audio/wav")),
+        )
+        .await;
+    assert!(
+        body.starts_with("WEBVTT\n\n00:00:00.000 --> 00:00:00.500\n"),
+        "{body}"
+    );
+
+    // Compressed input is decoded too.
+    let mp3 = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/audio/tone.mp3"
+    ))
+    .unwrap();
+    let (s, body) = t
+        .transcribe(
+            &[("model", WHISPER_MODEL)],
+            Some(("tone.mp3", &mp3, "audio/mpeg")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    assert!(
+        json_of(&body)["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("transcribed 1."),
+        "{body}"
+    );
+
+    // Errors: no file, no model, garbage audio, opus, word timestamps, streaming.
+    let (s, body) = t.transcribe(&[("model", WHISPER_MODEL)], None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(json_of(&body)["error"]["param"], "file");
+    let (s, body) = t.transcribe(&[], Some(("a.wav", &wav, "audio/wav"))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(json_of(&body)["error"]["param"], "model");
+    let (s, body) = t
+        .transcribe(
+            &[("model", WHISPER_MODEL)],
+            Some(("x.txt", b"not audio at all", "text/plain")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        json_of(&body)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unrecognised audio format"),
+        "{body}"
+    );
+    let webm = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/audio/tone.webm"
+    ))
+    .unwrap();
+    let (s, body) = t
+        .transcribe(
+            &[("model", WHISPER_MODEL)],
+            Some(("tone.webm", &webm, "audio/webm")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        json_of(&body)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("opus"),
+        "{body}"
+    );
+    let (s, body) = t
+        .transcribe(
+            &[
+                ("model", WHISPER_MODEL),
+                ("timestamp_granularities[]", "word"),
+            ],
+            Some(("a.wav", &wav, "audio/wav")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "unsupported");
+    let (s, _) = t
+        .transcribe(
+            &[("model", WHISPER_MODEL), ("stream", "true")],
+            Some(("a.wav", &wav, "audio/wav")),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // Unknown model → 404; an LLM → 400 unsupported.
+    let (s, body) = t
+        .transcribe(&[("model", "nope")], Some(("a.wav", &wav, "audio/wav")))
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{body}");
+    t.start_and_wait().await;
+    let (s, body) = t
+        .transcribe(&[("model", MODEL)], Some(("a.wav", &wav, "audio/wav")))
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "unsupported");
+
+    // Not multipart at all.
+    let (s, body) = t
+        .post_bytes(
+            "/v1/audio/transcriptions",
+            "application/json",
+            br#"{"model":"x"}"#.to_vec(),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_request");
+}
+
+#[tokio::test]
+async fn pull_whisper_reference_by_file_name_and_status_lists_backends() {
+    let t = setup().await;
+    // A `ggml-*.bin` file is recognised as a whisper model from its name alone.
+    let payload = vec![3u8; 20_000];
+    let file_app = Router::new().route(
+        "/ggml-tiny.bin",
+        axum::routing::get({
+            let payload = payload.clone();
+            move || async move { payload }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, file_app).await.unwrap() });
+    let (s, v) = t
+        .json(
+            "POST",
+            "/ohmygpu/v1/models/pull",
+            Some(json!({"model": format!("http://{addr}/ggml-tiny.bin"), "id": "w"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    assert_eq!(v["model"]["kind"], "whisper");
+    t.state
+        .manager
+        .wait_for("w", Duration::from_secs(10), |s| {
+            !matches!(s, ModelState::Downloading { .. })
+        })
+        .await
+        .unwrap();
+    let (_, v) = t.json("GET", "/ohmygpu/v1/models/w", None).await;
+    assert_eq!(v["state"], "installed", "{v}");
+    assert_eq!(v["kind"], "whisper");
+    assert_eq!(v["format"], "ggml");
+    let reg = ModelRegistry::load(t.state.paths.registry_path()).unwrap();
+    assert_eq!(
+        reg.get("w").unwrap().kind,
+        ohmygpu_inference::ModelKind::Whisper
+    );
+
+    // An explicit kind wins, and mmproj is refused on whisper models.
+    let (s, v) = t
+        .json(
+            "POST",
+            "/ohmygpu/v1/models/pull",
+            Some(json!({"model": "https://example.com/whisper-custom.bin", "id": "w2", "kind": "whisper", "mmproj": "x.gguf"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    // Catalog exposes the whisper entries with their kind.
+    let (_, v) = t.json("GET", "/ohmygpu/v1/catalog", None).await;
+    let whisper: Vec<&Value> = v["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["kind"] == "whisper")
+        .collect();
+    assert!(whisper.iter().any(|m| m["id"] == "whisper-base"), "{v}");
+    // Status lists every backend.
+    let (_, v) = t.json("GET", "/ohmygpu/v1/status", None).await;
+    assert!(!v["backends"].as_array().unwrap().is_empty(), "{v}");
+    let (_, v) = t.json("GET", "/ohmygpu/v1/backend", None).await;
+    assert!(v["backends"].is_array(), "{v}");
 }

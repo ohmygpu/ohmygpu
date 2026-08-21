@@ -25,7 +25,7 @@ use ohmygpu_core::download::{DownloadError, Downloader};
 use ohmygpu_core::lifecycle::{DownloadProgress, ModelState};
 use ohmygpu_core::paths::Paths;
 use ohmygpu_core::registry::{InstalledModel, ModelCapabilities, ModelRegistry, ModelSource};
-use ohmygpu_inference::InferenceError;
+use ohmygpu_inference::{InferenceError, ModelKind};
 use ohmygpu_runtime_api::{
     BackendAvailability, InstanceInfo, InstanceStatus, ModelInstance, ProgressUpdate,
     RuntimeBackend, StartSpec,
@@ -54,6 +54,9 @@ pub struct StartOptions {
 pub struct ModelView {
     pub id: String,
     pub display_name: String,
+    /// `llm` or `whisper`.
+    #[serde(default)]
+    pub kind: ModelKind,
     /// Lifecycle state name: `not_installed` | `downloading` | `installed` | …
     pub state: String,
     pub installed: bool,
@@ -161,10 +164,51 @@ struct Inner {
     models: BTreeMap<String, Record>,
 }
 
+/// The runtime adapters the manager dispatches to, by model kind.
+#[derive(Clone)]
+pub struct Backends {
+    /// Text / vision models (llama.cpp).
+    pub llm: Arc<dyn RuntimeBackend>,
+    /// Speech-to-text models (whisper.cpp); `None` = not configured.
+    pub whisper: Option<Arc<dyn RuntimeBackend>>,
+}
+
+impl Backends {
+    pub fn new(llm: Arc<dyn RuntimeBackend>, whisper: Option<Arc<dyn RuntimeBackend>>) -> Self {
+        Self { llm, whisper }
+    }
+
+    /// One backend serving every kind (tests).
+    pub fn single(backend: Arc<dyn RuntimeBackend>) -> Self {
+        Self {
+            llm: backend.clone(),
+            whisper: Some(backend),
+        }
+    }
+
+    pub fn for_kind(&self, kind: ModelKind) -> Option<&Arc<dyn RuntimeBackend>> {
+        match kind {
+            ModelKind::Llm => Some(&self.llm),
+            ModelKind::Whisper => self.whisper.as_ref(),
+        }
+    }
+
+    /// Every configured backend, LLM first, each id once.
+    pub fn all(&self) -> Vec<&Arc<dyn RuntimeBackend>> {
+        let mut out = vec![&self.llm];
+        if let Some(w) = &self.whisper {
+            if w.id() != self.llm.id() {
+                out.push(w);
+            }
+        }
+        out
+    }
+}
+
 pub struct ModelManager {
     paths: Paths,
     config: Config,
-    backend: Arc<dyn RuntimeBackend>,
+    backends: Backends,
     downloader: Downloader,
     registry: Mutex<ModelRegistry>,
     inner: Mutex<Inner>,
@@ -173,11 +217,7 @@ pub struct ModelManager {
 }
 
 impl ModelManager {
-    pub fn new(
-        paths: Paths,
-        config: Config,
-        backend: Arc<dyn RuntimeBackend>,
-    ) -> anyhow::Result<Arc<Self>> {
+    pub fn new(paths: Paths, config: Config, backends: Backends) -> anyhow::Result<Arc<Self>> {
         paths.ensure_dirs()?;
         let mut registry = ModelRegistry::load(paths.registry_path())?;
         let pruned = registry.prune_missing()?;
@@ -198,15 +238,29 @@ impl ModelManager {
             downloader: Downloader::new(config.models.hf_token.clone()),
             paths,
             config,
-            backend,
+            backends,
             registry: Mutex::new(registry),
             inner: Mutex::new(Inner { models }),
             changed,
         }))
     }
 
+    /// The LLM backend (llama.cpp) — what most clients mean by "the backend".
     pub fn backend(&self) -> &Arc<dyn RuntimeBackend> {
-        &self.backend
+        &self.backends.llm
+    }
+
+    pub fn backends(&self) -> &Backends {
+        &self.backends
+    }
+
+    /// The backend that runs `kind` models, by id or kind name.
+    pub fn backend_named(&self, name: &str) -> Option<&Arc<dyn RuntimeBackend>> {
+        match name {
+            "llm" | "llamacpp" => Some(&self.backends.llm),
+            "whisper" => self.backends.whisper.as_ref(),
+            other => self.backends.all().into_iter().find(|b| b.id() == other),
+        }
     }
 
     pub fn config(&self) -> &Config {
@@ -235,6 +289,11 @@ impl ModelManager {
             .or_else(|| pending.map(|p| p.display_name.clone()))
             .unwrap_or_else(|| id.to_string());
         let curated = installed.map(|m| m.curated).unwrap_or(cat.is_some());
+        let kind = installed
+            .map(|m| m.kind)
+            .or_else(|| cat.map(|c| c.kind))
+            .or_else(|| pending.map(|p| p.kind))
+            .unwrap_or_default();
         // While a download is in flight the pending reference describes what is
         // being installed (e.g. a projector being added to an installed model).
         let capabilities = pending
@@ -281,6 +340,7 @@ impl ModelManager {
         };
         ModelView {
             id: id.to_string(),
+            kind,
             display_name,
             state: rec.state.name().to_string(),
             installed: installed.is_some(),
@@ -380,9 +440,15 @@ impl ModelManager {
         reference: &str,
         id_override: Option<&str>,
         mmproj: Option<&str>,
+        kind: Option<ModelKind>,
     ) -> Result<ModelView, ManagerError> {
-        let mut mref =
-            ModelRef::parse(reference, id_override).map_err(ManagerError::InvalidReference)?;
+        let mut mref = ModelRef::parse_kind(reference, id_override, kind)
+            .map_err(ManagerError::InvalidReference)?;
+        if mref.mmproj.is_some() && mref.kind != ModelKind::Llm {
+            return Err(ManagerError::InvalidReference(
+                "a vision projector (mmproj) only applies to LLMs".into(),
+            ));
+        }
         if let Some(m) = mmproj {
             mref = mref
                 .with_mmproj(m)
@@ -533,7 +599,8 @@ impl ModelManager {
             id: id.clone(),
             display_name: mref.display_name.clone(),
             source: mref.source.clone(),
-            format: "gguf".into(),
+            kind: mref.kind,
+            format: mref.kind.format().into(),
             path: plan[0].dest.clone(),
             mmproj_path: plan.get(1).map(|p| p.dest.clone()),
             size_bytes: size,
@@ -694,7 +761,7 @@ impl ModelManager {
         id: &str,
         opts: StartOptions,
     ) -> Result<ModelView, ManagerError> {
-        let (gen, model_path, mmproj_path) = {
+        let (gen, model_path, mmproj_path, installed_kind) = {
             let mut inner = self.inner.lock().unwrap();
             let registry = self.registry.lock().unwrap();
             let rec = inner
@@ -725,12 +792,14 @@ impl ModelManager {
                 rec.generation,
                 installed.path.clone(),
                 installed.mmproj_path.clone(),
+                installed.kind,
             )
         };
         self.notify();
 
         let spec = StartSpec {
             model_id: id.to_string(),
+            kind: installed_kind,
             model_path,
             mmproj_path,
             context_length: opts.context_length,
@@ -793,15 +862,23 @@ impl ModelManager {
             };
             progress_self.set_starting_message(&progress_id, gen, msg);
         });
+        let Some(backend) = self.backends.for_kind(spec.kind).cloned() else {
+            self.set_error_if_current(
+                &id,
+                gen,
+                format!("no backend configured for {} models", spec.kind.as_str()),
+            );
+            return;
+        };
         self.set_starting_message(&id, gen, "preparing backend");
-        if let Err(e) = self.backend.prepare(Some(progress)).await {
+        if let Err(e) = backend.prepare(Some(progress)).await {
             self.set_error_if_current(&id, gen, format!("backend not available: {e}"));
             return;
         }
 
         // 2. Start the model.
         self.set_starting_message(&id, gen, "loading model");
-        let instance = match self.backend.start(spec).await {
+        let instance = match backend.start(spec).await {
             Ok(inst) => inst,
             Err(e) => {
                 self.set_error_if_current(&id, gen, e.to_string());
@@ -1035,7 +1112,17 @@ impl ModelManager {
         })
     }
 
+    /// Availability of the LLM backend.
     pub async fn backend_availability(&self) -> BackendAvailability {
-        self.backend.available().await
+        self.backends.llm.available().await
+    }
+
+    /// Availability of every configured backend: `(id, availability)`.
+    pub async fn backend_availabilities(&self) -> Vec<(&'static str, BackendAvailability)> {
+        let mut out = Vec::new();
+        for b in self.backends.all() {
+            out.push((b.id(), b.available().await));
+        }
+        out
     }
 }

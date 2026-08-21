@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ohmygpu_core::catalog::{self, CatalogEntry};
 use ohmygpu_core::lifecycle::ModelState;
+use ohmygpu_inference::ModelKind;
 use ohmygpu_runtime_api::BackendAvailability;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -32,6 +33,8 @@ pub struct StatusResponse {
     pub port: u16,
     pub data_dir: String,
     pub backend: BackendStatus,
+    /// Every configured backend (LLM first).
+    pub backends: Vec<BackendStatus>,
     pub models: ModelsSummary,
     pub hardware_backend: String,
 }
@@ -64,6 +67,13 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
             id: state.manager.backend().id(),
             availability,
         },
+        backends: state
+            .manager
+            .backend_availabilities()
+            .await
+            .into_iter()
+            .map(|(id, availability)| BackendStatus { id, availability })
+            .collect(),
         models: ModelsSummary {
             installed: state.manager.installed_count(),
             running: state.manager.running_ids(),
@@ -81,12 +91,38 @@ pub async fn hardware(
 
 pub async fn backend(State(state): State<SharedState>) -> Json<Value> {
     let availability = state.manager.backend_availability().await;
-    Json(json!({ "id": state.manager.backend().id(), "availability": availability }))
+    let backends: Vec<Value> = state
+        .manager
+        .backend_availabilities()
+        .await
+        .into_iter()
+        .map(|(id, availability)| json!({ "id": id, "availability": availability }))
+        .collect();
+    Json(json!({
+        "id": state.manager.backend().id(),
+        "availability": availability,
+        "backends": backends,
+    }))
 }
 
-/// Install/verify the backend binary now (otherwise it happens on first start).
-pub async fn backend_install(State(state): State<SharedState>) -> Result<Json<Value>, ApiError> {
-    let availability = state.manager.backend().prepare(None).await.map_err(|e| {
+#[derive(Debug, Deserialize, Default)]
+pub struct BackendInstallQuery {
+    /// `llamacpp` (default) or `whisper`.
+    #[serde(default)]
+    pub backend: Option<String>,
+}
+
+/// Install/verify a backend binary now (otherwise it happens on first start).
+pub async fn backend_install(
+    State(state): State<SharedState>,
+    Query(q): Query<BackendInstallQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let name = q.backend.as_deref().unwrap_or("llamacpp");
+    let backend = state.manager.backend_named(name).ok_or_else(|| {
+        ApiError::invalid(format!("unknown backend '{name}' (llamacpp, whisper)"))
+            .with_param("backend")
+    })?;
+    let availability = backend.prepare(None).await.map_err(|e| {
         ApiError::new(
             StatusCode::BAD_GATEWAY,
             "server_error",
@@ -95,7 +131,7 @@ pub async fn backend_install(State(state): State<SharedState>) -> Result<Json<Va
         )
     })?;
     Ok(Json(
-        json!({ "id": state.manager.backend().id(), "availability": availability }),
+        json!({ "id": backend.id(), "availability": availability }),
     ))
 }
 
@@ -163,6 +199,10 @@ pub struct PullRequest {
     /// the same Hugging Face repo, or a full URL. Makes the model accept images.
     #[serde(default)]
     pub mmproj: Option<String>,
+    /// `llm` or `whisper` for non-catalog references whose file name does not
+    /// make it obvious (`*.gguf` → llm, `ggml-*.bin` → whisper).
+    #[serde(default)]
+    pub kind: Option<ModelKind>,
 }
 
 /// 202 while downloading, 200 if it was already installed.
@@ -170,9 +210,12 @@ pub async fn pull_model(
     State(state): State<SharedState>,
     ApiJson(req): ApiJson<PullRequest>,
 ) -> Result<Response, ApiError> {
-    let view = state
-        .manager
-        .pull(&req.model, req.id.as_deref(), req.mmproj.as_deref())?;
+    let view = state.manager.pull(
+        &req.model,
+        req.id.as_deref(),
+        req.mmproj.as_deref(),
+        req.kind,
+    )?;
     let code = if view.state == "downloading" {
         StatusCode::ACCEPTED
     } else {

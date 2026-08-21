@@ -19,7 +19,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use ohmygpu_inference::{
-    InferenceError, InferenceRequest, InferenceResponse, InferenceStream, ResponseAccumulator,
+    InferenceError, InferenceRequest, InferenceResponse, InferenceStream, ModelKind,
+    ResponseAccumulator, TranscriptionRequest, TranscriptionResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +42,9 @@ pub struct BackendAvailability {
 pub struct StartSpec {
     /// OhMyGPU model id (used for logging / aliasing).
     pub model_id: String,
+    /// What kind of model this is (decides which backend starts it).
+    #[serde(default)]
+    pub kind: ModelKind,
     /// Path to the model file (GGUF for llama.cpp).
     pub model_path: PathBuf,
     /// Multimodal projector (vision) that belongs to this model, if it can see.
@@ -152,6 +156,18 @@ pub trait ModelInstance: Send + Sync {
             acc.push(&item?);
         }
         Ok(acc.finish(model))
+    }
+
+    /// Speech to text. Only speech models implement this; everything else
+    /// answers `Unsupported`.
+    async fn transcribe(
+        &self,
+        request: TranscriptionRequest,
+    ) -> Result<TranscriptionResponse, InferenceError> {
+        Err(InferenceError::Unsupported(format!(
+            "model '{}' does not transcribe audio (not a speech-to-text model)",
+            request.model
+        )))
     }
 
     /// Resolves when the instance exits for any reason (crash or `stop`).

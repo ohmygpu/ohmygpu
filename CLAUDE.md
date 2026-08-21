@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Product
 
 **OhMyGPU Runtime** — an open-source, embeddable, headless local AI runtime for application developers.
-It runs GGUF models (text, and vision models with a multimodal projector for image input) through a supervised `llama-server` (llama.cpp) subprocess and exposes:
+It runs GGUF models (text, and vision models with a multimodal projector for image input) through a supervised `llama-server` (llama.cpp) subprocess, and whisper.cpp ggml models through a supervised `whisper-server` subprocess, and exposes:
 
 - `POST /v1/responses` (canonical) and `POST /v1/chat/completions` (compatibility) — an OpenAI-compatible **subset**, both feeding **one** internal inference pipeline
+- `POST /v1/audio/transcriptions` — OpenAI-compatible speech to text (multipart upload, decoded in the daemon, whisper.cpp backend)
 - `GET /v1/models`
 - `/ohmygpu/v1/*` — the Management API (health, status, hardware, catalog, model pull/delete/start/stop, backend install, shutdown)
 
@@ -23,7 +24,7 @@ Out of scope for v0.1 (do not add to the critical path): GUI/Tauri, chat app, im
 cargo build                                   # debug; no GPU cargo features exist any more
 make build                                    # release: target/release/{ohmygpu-runtime,ohmygpu}
 cargo test --workspace                        # fast: unit + API tests with a mock backend
-OHMYGPU_E2E=1 cargo test -p ohmygpu_daemon --test e2e_llamacpp -- --ignored --nocapture   # real llama.cpp + ~470 MB model
+OHMYGPU_E2E=1 cargo test -p ohmygpu_daemon --test e2e_llamacpp -- --ignored --nocapture   # real llama.cpp (+ whisper.cpp) + small models; on macOS set OHMYGPU_WHISPER_SERVER to a local whisper-server build until a release carries one
 cargo run --bin ohmygpu-runtime -- --port 10692 --data-dir /tmp/omg      # standalone daemon
 cargo run --bin ohmygpu -- serve              # same daemon via the CLI
 cargo run --bin ohmygpu -- model catalog | model pull <id> | run <id> | stop <id> | status | hardware
@@ -40,10 +41,15 @@ crates/core/              ohmygpu_core        paths, config (+env), hardware det
                                               recipe.rs (recipe schema v1: YAML/JSON loader, validation, JSON Schema)
 crates/inference/         ohmygpu_inference   InferenceRequest/Response, InputItem/OutputItem, ToolDefinition/ToolCall,
                                               GenerationOptions, StreamEvent, ResponseAccumulator, InferenceError
-crates/runtime_api/       ohmygpu_runtime_api RuntimeBackend { available, prepare, start } / ModelInstance { status, infer(_stream), wait, stop }
-crates/runtime_llamacpp/  ohmygpu_runtime_llamacpp  install.rs (locate/managed install), process.rs (spawn/supervise/stop),
+crates/runtime_api/       ohmygpu_runtime_api RuntimeBackend { available, prepare, start } / ModelInstance { status, infer(_stream), transcribe, wait, stop }
+crates/runtime_common/    ohmygpu_runtime_common  process.rs (supervised child server: spawn/logs/exit/stop), install.rs (locate, install records,
+                                              download + extract release archives) — shared by every subprocess backend
+crates/runtime_llamacpp/  ohmygpu_runtime_llamacpp  install.rs (asset choice + managed install), process.rs (llama-server args),
                                               wire.rs (internal ⇄ llama-server JSON/SSE), lib.rs (backend + instance)
-daemon/                   ohmygpu_daemon      manager.rs (ModelManager: lifecycle orchestrator), api/{responses,chat_completions,models,management}.rs,
+crates/runtime_whisper/   ohmygpu_runtime_whisper   install.rs (official Linux/Windows assets; macOS build from our release), wire.rs
+                                              (TranscriptionRequest ⇄ whisper-server /inference multipart + verbose_json), lib.rs
+daemon/                   ohmygpu_daemon      manager.rs (ModelManager + Backends: lifecycle orchestrator, one backend per ModelKind),
+                                              api/{responses,chat_completions,audio,images,models,management}.rs, audio.rs (decode + resample to 16 kHz),
                                               error.rs (OpenAI error envelope), server.rs (bind/graceful shutdown), main.rs (`ohmygpu-runtime` bin),
                                               testing.rs (MockBackend, `testing` feature), tests/api.rs, tests/e2e_llamacpp.rs
 cli/                      ohmygpu_cli         thin HTTP client of the Management API (`omg`)
@@ -57,8 +63,8 @@ docs/recipes.md           recipe format spec: fields, merge rules, resolver cont
 
 ## Rules
 
-1. **One inference pipeline.** New API features go through protocol adapters → `ohmygpu_inference` types → `ModelInstance`. Never let OpenAI schemas leak into `runtime_*` crates, and never let llama-server's wire format leak into `daemon/`. Images follow the same rule: adapters turn `input_image`/`image_url` into `ContentPart::Image` (`daemon/src/api/images.rs` validates data: URLs and inlines http(s) URLs); backends only ever see `data:` URLs.
-2. **Explicit lifecycle.** All state changes go through `ModelManager`; background tasks must check the record `generation` before applying results.
+1. **One inference pipeline.** New API features go through protocol adapters → `ohmygpu_inference` types → `ModelInstance`. Never let OpenAI schemas leak into `runtime_*` crates, and never let llama-server's / whisper-server's wire format leak into `daemon/`. Images follow the same rule: adapters turn `input_image`/`image_url` into `ContentPart::Image` (`daemon/src/api/images.rs` validates data: URLs and inlines http(s) URLs); backends only ever see `data:` URLs. Audio too: `daemon/src/audio.rs` decodes uploads to 16 kHz mono PCM (`AudioInput`); backends never see containers or codecs.
+2. **Explicit lifecycle.** All state changes go through `ModelManager`; background tasks must check the record `generation` before applying results. Every model has a `ModelKind` (`llm` | `whisper`) that picks the backend (`Backends::for_kind`) and the API that serves it.
 3. **CLI stays thin.** No model/runtime business logic in `cli/`; use the Management API (read-only offline fallbacks only).
 4. **Do not claim unimplemented API fields.** Unsupported request features return `400 unsupported`; document supported subsets in the README.
 5. Keep the default test suite fast and offline (mock backend); real-model tests stay behind `OHMYGPU_E2E=1`.

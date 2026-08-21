@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use ohmygpu_inference::ModelKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,7 +40,10 @@ pub struct InstalledModel {
     pub id: String,
     pub display_name: String,
     pub source: ModelSource,
-    /// `gguf` (the only format in v0.1)
+    /// `llm` (default) or `whisper` — decides the backend and the API.
+    #[serde(default)]
+    pub kind: ModelKind,
+    /// `gguf` for LLMs, `ggml` for whisper models.
     pub format: String,
     /// Absolute path to the model file.
     pub path: PathBuf,
@@ -169,6 +173,7 @@ mod tests {
             format: "gguf".into(),
             path,
             mmproj_path: None,
+            kind: Default::default(),
             size_bytes: 3,
             installed_at: Utc::now(),
             capabilities: ModelCapabilities {

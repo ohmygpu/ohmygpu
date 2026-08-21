@@ -1,0 +1,24 @@
+[package]
+name = "ohmygpu_runtime_common"
+description = "Shared plumbing for OhMyGPU runtime adapters: supervised server processes and managed binary installs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ohmygpu_core.workspace = true
+ohmygpu_runtime_api.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

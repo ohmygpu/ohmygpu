@@ -5,6 +5,7 @@
 //! /ohmygpu/v1/*  local runtime management                 → ModelManager
 //! ```
 
+pub mod audio;
 pub mod chat_completions;
 pub mod images;
 pub mod management;
@@ -36,6 +37,10 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/models/:id", get(models::get_model))
         .route("/v1/chat/completions", post(chat_completions::create))
         .route("/v1/responses", post(responses::create))
+        .route(
+            "/v1/audio/transcriptions",
+            post(audio::transcriptions).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         // --- management ---
         .route("/ohmygpu/v1/health", get(management::health))
         .route("/ohmygpu/v1/status", get(management::status))
