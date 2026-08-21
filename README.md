@@ -38,15 +38,29 @@ Your app tells the runtime *ensure model exists → start model*, then uses the 
 
 Requires: macOS (Apple Silicon or Intel), Linux x86_64/arm64, or Windows x86_64. A GPU is used when present (Metal / Vulkan / CUDA); CPU works too.
 
-**1. Install** — one line on macOS and Linux. It downloads the latest release, verifies its checksum, and installs `ohmygpu-runtime` (the runtime), `ohmygpu` (the CLI) and the `omg` alias into `/usr/local/bin` (sudo only if that needs it) — or upgrades the copy you already have, in place:
+**1. Install.** Every route below gives you `ohmygpu-runtime` (the runtime), `ohmygpu` (the CLI) and the `omg` alias, verifies the release checksum, and upgrades an existing copy in place. Nothing else is installed: models and llama.cpp go to `~/.config/ohmygpu`, not next to the binaries.
+
+macOS / Linux — one line (into `/usr/local/bin`, sudo only if that needs it):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.sh | sh
 ```
 
-`--dir ~/.local/bin` (or `OHMYGPU_INSTALL_DIR`) picks the directory, `--version v0.5.0` (or `OHMYGPU_VERSION`) pins a release, `--no-sudo` never escalates; pass them as `sh -s -- --dir ~/.local/bin`. From then on **`omg upgrade`** updates both binaries in place (`omg upgrade --check` only looks, `omg upgrade v0.5.0` pins a release). Nothing else is installed: models and llama.cpp go to `~/.config/ohmygpu`, not next to the binaries.
+Homebrew (macOS / Linux):
 
-**Manual install (and Windows).** Each release ships one archive per platform with the two binaries — put them anywhere, ideally on your `PATH`:
+```bash
+brew install ohmygpu/tap/ohmygpu
+```
+
+Windows x64 — PowerShell (into `%LOCALAPPDATA%\Programs\ohmygpu`, added to your user `PATH`):
+
+```powershell
+irm https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.ps1 | iex
+```
+
+Script options: `--dir ~/.local/bin` / `OHMYGPU_INSTALL_DIR` picks the directory, `--version v0.5.0` / `OHMYGPU_VERSION` pins a release, `--no-sudo` never escalates (pass flags as `sh -s -- --dir ~/.local/bin`; on Windows use the environment variables, or `-InstallDir` / `-Version` / `-NoModifyPath` when running the downloaded file). **Upgrading:** `omg upgrade` for script installs (`--check` only looks, `omg upgrade v0.5.0` pins), `brew upgrade ohmygpu` for Homebrew.
+
+**Manual install.** Each release ships one archive per platform with the two binaries — put them anywhere, ideally on your `PATH`:
 
 | Platform | Latest release |
 |---|---|
@@ -55,15 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.sh | s
 | Linux x86_64 | <https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-x86_64-unknown-linux-gnu.tar.gz> |
 | Linux arm64 | <https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-aarch64-unknown-linux-gnu.tar.gz> |
 | Windows x86_64 | <https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-x86_64-pc-windows-msvc.zip> |
-
-```bash
-# example: macOS Apple Silicon — pick T from the table for your platform
-T=aarch64-apple-darwin
-curl -LO https://github.com/ohmygpu/ohmygpu/releases/latest/download/ohmygpu-$T.tar.gz
-tar xzf ohmygpu-$T.tar.gz
-sudo install ohmygpu-$T/ohmygpu-runtime ohmygpu-$T/ohmygpu /usr/local/bin/   # or ~/.local/bin, or leave them in place
-alias omg=ohmygpu
-```
 
 A specific version lives at `releases/download/<tag>/<same file name>`; every release also carries `SHA256SUMS.txt` (`shasum -a 256 <file>`). The binaries are not code-signed yet: if macOS refuses one you downloaded with a browser, run `xattr -dr com.apple.quarantine <dir>` (curl downloads are not quarantined).
 

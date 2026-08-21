@@ -1,0 +1,100 @@
+# Exercise the installers for real against the latest published release — they are
+# version-agnostic, so a genuine install into a temp dir is the only meaningful test
+# (and the only way to test install.ps1 from a non-Windows dev machine).
+name: installers
+
+on:
+  push:
+    branches: [main]
+    paths: [install.sh, install.ps1, packaging/**, .github/workflows/installers.yml]
+  pull_request:
+    paths: [install.sh, install.ps1, packaging/**, .github/workflows/installers.yml]
+  workflow_dispatch:
+
+jobs:
+  sh:
+    name: install.sh (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: lint
+        if: runner.os == 'Linux'
+        run: |
+          sh -n install.sh
+          shellcheck -s sh install.sh packaging/homebrew/render-formula.sh
+      - name: fresh install into a temp dir (piped, like curl | sh)
+        run: |
+          dir="$RUNNER_TEMP/omg-bin"
+          cat install.sh | OHMYGPU_INSTALL_DIR="$dir" sh
+          "$dir/ohmygpu" --version
+          "$dir/ohmygpu-runtime" --version
+          "$dir/omg" --version
+      - name: pin an older release, upgrade in place via PATH lookup, then nothing to do
+        run: |
+          dir="$RUNNER_TEMP/omg-bin"
+          sh install.sh --dir "$dir" --version v0.4.0
+          "$dir/ohmygpu" --version | grep -q '0\.4\.0'
+          PATH="$dir:$PATH" sh install.sh
+          "$dir/ohmygpu" --version | grep -qv '0\.4\.0'
+          PATH="$dir:$PATH" sh install.sh | grep -q 'nothing to do'
+      - name: render the Homebrew formula for the latest release
+        run: |
+          tag=$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/ohmygpu/ohmygpu/releases/latest | sed 's#.*/##')
+          echo "latest release: $tag"
+          curl -fsSL -o SHA256SUMS.txt "https://github.com/ohmygpu/ohmygpu/releases/download/$tag/SHA256SUMS.txt"
+          sh packaging/homebrew/render-formula.sh "$tag" SHA256SUMS.txt > ohmygpu.rb
+          ruby -c ohmygpu.rb
+      # Install the rendered formula from a throw-away local tap (Homebrew refuses bare paths).
+      - name: brew install + test the rendered formula
+        if: runner.os == 'macOS'
+        run: |
+          brew tap-new --no-git ohmygpu/ci-test
+          cp ohmygpu.rb "$(brew --repository ohmygpu/ci-test)/Formula/ohmygpu.rb"
+          brew audit --formula ohmygpu/ci-test/ohmygpu
+          brew install ohmygpu/ci-test/ohmygpu
+          brew test ohmygpu/ci-test/ohmygpu
+          omg --version
+
+  ps1:
+    name: install.ps1 (windows, ${{ matrix.shell }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]   # Windows PowerShell 5.1 (the default on Windows) and PowerShell 7
+    steps:
+      - uses: actions/checkout@v5
+      - name: PSScriptAnalyzer
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { Install-Module PSScriptAnalyzer -Force -Scope CurrentUser }
+          $findings = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning, Error
+          $findings | Format-Table -AutoSize | Out-String | Write-Host
+          if ($findings) { throw "PSScriptAnalyzer reported $($findings.Count) finding(s)" }
+      - name: fresh install into a temp dir (piped, like irm | iex)
+        shell: ${{ matrix.shell }}
+        env:
+          OHMYGPU_INSTALL_DIR: ${{ runner.temp }}\omg-bin
+        run: |
+          Get-Content -Raw install.ps1 | Invoke-Expression
+          & "$env:OHMYGPU_INSTALL_DIR\ohmygpu.exe" --version
+          & "$env:OHMYGPU_INSTALL_DIR\ohmygpu-runtime.exe" --version
+          & "$env:OHMYGPU_INSTALL_DIR\omg.exe" --version
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($userPath -notlike "*omg-bin*") { throw "install dir was not added to the user PATH: $userPath" }
+      - name: pin an older release, upgrade in place via PATH lookup, then nothing to do
+        shell: ${{ matrix.shell }}
+        run: |
+          $dir = "$env:RUNNER_TEMP\omg-bin"
+          .\install.ps1 -InstallDir $dir -Version v0.4.0 -NoModifyPath
+          if ((& "$dir\ohmygpu.exe" --version) -notmatch '0\.4\.0') { throw "pinning v0.4.0 failed" }
+          $env:Path = "$dir;$env:Path"
+          .\install.ps1 -NoModifyPath
+          if ((& "$dir\ohmygpu.exe" --version) -match '0\.4\.0') { throw "upgrade in place failed" }
+          $out = .\install.ps1 -NoModifyPath | Out-String
+          if ($out -notmatch 'nothing to do') { throw "expected 'nothing to do', got: $out" }

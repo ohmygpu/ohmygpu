@@ -109,6 +109,13 @@ fn exe(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
+/// True for a binary living in a Homebrew cellar (`/opt/homebrew/Cellar/ohmygpu/…`,
+/// `/home/linuxbrew/.linuxbrew/Cellar/…`): those installs belong to `brew upgrade`.
+pub fn is_homebrew_install(path: &Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str().to_str() == Some("Cellar"))
+}
+
 fn sha256_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -296,6 +303,12 @@ pub async fn upgrade(client: &Client, opts: UpgradeOptions<'_>) -> Result<()> {
     // Where do the binaries go? Fail before downloading if we cannot write there.
     let dests = destinations()?;
     let me = dests[0].1.clone();
+    if is_homebrew_install(&me) {
+        bail!(
+            "ohmygpu is installed with Homebrew ({}) — upgrade it with: brew upgrade ohmygpu",
+            me.display()
+        );
+    }
     let mut dirs: Vec<&Path> = dests.iter().filter_map(|(_, p)| p.parent()).collect();
     dirs.dedup();
     for dir in &dirs {
@@ -486,6 +499,20 @@ mod tests {
             release_target().is_some(),
             "this CI platform has a release build"
         );
+    }
+
+    #[test]
+    fn homebrew_installs_are_recognised() {
+        assert!(is_homebrew_install(Path::new(
+            "/opt/homebrew/Cellar/ohmygpu/0.5.0/bin/ohmygpu"
+        )));
+        assert!(is_homebrew_install(Path::new(
+            "/home/linuxbrew/.linuxbrew/Cellar/ohmygpu/0.5.0/bin/ohmygpu"
+        )));
+        assert!(!is_homebrew_install(Path::new("/usr/local/bin/ohmygpu")));
+        assert!(!is_homebrew_install(Path::new(
+            "/Users/x/.local/bin/ohmygpu"
+        )));
     }
 
     #[test]

@@ -56,7 +56,14 @@ daemon/                   ohmygpu_daemon      manager.rs (ModelManager + Backend
 cli/                      ohmygpu_cli         thin HTTP client of the Management API (`omg`); upgrade.rs = `omg upgrade`
                                               (self-update of both binaries from a GitHub release, SHA256SUMS verified)
 install.sh                `curl | sh` installer for macOS/Linux: latest release → existing install dir, else /usr/local/bin,
-                          else ~/.local/bin; attached to every release by the workflow; shellcheck-clean (CI checks it)
+                          else ~/.local/bin; refuses Homebrew installs (→ brew upgrade); attached to every release; shellcheck-clean
+install.ps1               `irm | iex` installer for Windows x64: %LOCALAPPDATA%\Programs\ohmygpu + user PATH; omg.exe is a copy
+packaging/homebrew/       render-formula.sh <tag> <SHA256SUMS.txt> → Formula/ohmygpu.rb for github.com/ohmygpu/homebrew-tap
+                          (`brew install ohmygpu/tap/ohmygpu`); the release workflow renders + pushes it (secret HOMEBREW_TAP_TOKEN)
+.cargo/config.toml        static CRT for x86_64-pc-windows-msvc so the Windows binaries run without the VC++ redistributable
+.github/workflows/        release.yml (tag → test, build matrix, whisper-server macOS, GitHub release, Homebrew tap bump);
+                          installers.yml (real runs of install.sh on ubuntu/macos + brew install of the rendered formula,
+                          install.ps1 on windows with PowerShell 5.1 and 7 — the only place install.ps1 is tested)
 recipes/                  example per-model recipes (YAML; loaded by core tests) — see docs/recipes.md
 schemas/recipe-v1.json    generated JSON Schema for recipes (`make recipe-schema`; a test fails when stale)
 archive/                  deferred code, not built

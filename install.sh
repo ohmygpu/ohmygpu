@@ -225,6 +225,9 @@ main() {
 
     # Where to install.
     if [ -z "$INSTALL_DIR" ]; then
+        case "$existing_dir" in
+            */Cellar/*) die "ohmygpu is installed with Homebrew ($existing) — upgrade it with: brew upgrade ohmygpu   (or pass --dir to install a separate copy)" ;;
+        esac
         if [ -n "$existing_dir" ]; then
             INSTALL_DIR="$existing_dir"
         elif [ -w /usr/local/bin ] || { [ -d /usr/local/bin ] && [ -z "$NO_SUDO" ] && command -v sudo >/dev/null 2>&1; }; then

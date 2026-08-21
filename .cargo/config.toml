@@ -1,0 +1,4 @@
+# Windows release binaries must run on a machine without the Visual C++ redistributable
+# (the installer drops them on a clean PC): link the CRT statically.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
