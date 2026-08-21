@@ -6,9 +6,9 @@ name: installers
 on:
   push:
     branches: [main]
-    paths: [install.sh, install.ps1, packaging/**, .github/workflows/installers.yml]
+    paths: [install.sh, install.ps1, packaging/**, .github/scripts/**, .github/workflows/installers.yml]
   pull_request:
-    paths: [install.sh, install.ps1, packaging/**, .github/workflows/installers.yml]
+    paths: [install.sh, install.ps1, packaging/**, .github/scripts/**, .github/workflows/installers.yml]
   workflow_dispatch:
 
 jobs:
@@ -76,25 +76,7 @@ jobs:
           $findings = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning, Error
           $findings | Format-Table -AutoSize | Out-String | Write-Host
           if ($findings) { throw "PSScriptAnalyzer reported $($findings.Count) finding(s)" }
-      - name: fresh install into a temp dir (piped, like irm | iex)
-        shell: ${{ matrix.shell }}
-        env:
-          OHMYGPU_INSTALL_DIR: ${{ runner.temp }}\omg-bin
-        run: |
-          Get-Content -Raw install.ps1 | Invoke-Expression
-          & "$env:OHMYGPU_INSTALL_DIR\ohmygpu.exe" --version
-          & "$env:OHMYGPU_INSTALL_DIR\ohmygpu-runtime.exe" --version
-          & "$env:OHMYGPU_INSTALL_DIR\omg.exe" --version
-          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-          if ($userPath -notlike "*omg-bin*") { throw "install dir was not added to the user PATH: $userPath" }
-      - name: pin an older release, upgrade in place via PATH lookup, then nothing to do
-        shell: ${{ matrix.shell }}
-        run: |
-          $dir = "$env:RUNNER_TEMP\omg-bin"
-          .\install.ps1 -InstallDir $dir -Version v0.4.0 -NoModifyPath
-          if ((& "$dir\ohmygpu.exe" --version) -notmatch '0\.4\.0') { throw "pinning v0.4.0 failed" }
-          $env:Path = "$dir;$env:Path"
-          .\install.ps1 -NoModifyPath
-          if ((& "$dir\ohmygpu.exe" --version) -match '0\.4\.0') { throw "upgrade in place failed" }
-          $out = .\install.ps1 -NoModifyPath | Out-String
-          if ($out -notmatch 'nothing to do') { throw "expected 'nothing to do', got: $out" }
+      # `shell:` cannot take a matrix expression, so pick the interpreter from cmd.
+      - name: fresh install, pin v0.4.0, upgrade in place via PATH, nothing to do
+        shell: cmd
+        run: ${{ matrix.shell }} -NoProfile -ExecutionPolicy Bypass -File .github\scripts\test-install.ps1
