@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    OhMyGPU Runtime installer for Windows (x64) — https://github.com/ohmygpu/ohmygpu
+    OhMyGPU Runtime installer for Windows (x64) - https://github.com/ohmygpu/ohmygpu
 
 .DESCRIPTION
     Installs the latest GitHub release of ohmygpu-runtime.exe (the runtime) and
@@ -12,7 +12,7 @@
 
         irm https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.ps1 | iex
 
-    Options — environment variables for the one-liner, parameters when running the file:
+    Options - environment variables for the one-liner, parameters when running the file:
 
         OHMYGPU_VERSION=v0.5.0      -Version v0.5.0     release to install (default: latest)
         OHMYGPU_INSTALL_DIR=DIR     -InstallDir DIR     install directory (default: the existing
@@ -22,6 +22,7 @@
 
     Running the downloaded file: powershell -ExecutionPolicy Bypass -File install.ps1 [-Version v0.5.0]
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'installer console output')]
 [CmdletBinding()]
 param(
     [string]$Version = $env:OHMYGPU_VERSION,
@@ -48,7 +49,7 @@ function Write-Warn([string]$Message) { Write-Host "warning: $Message" -Foregrou
 # Older Windows PowerShell defaults may not offer TLS 1.2, which GitHub requires.
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-} catch { }
+} catch { Write-Verbose "could not enable TLS 1.2: $_" }
 
 # ---------------------------------------------------------------------------
 # platform
@@ -90,7 +91,7 @@ $existingVersion = $null
 $existingDir = $null
 if ($existing) {
     $existingDir = Split-Path -Parent $existing.Path
-    try { $existingVersion = ((& $existing.Path --version) -split '\s+')[1] } catch { }
+    try { $existingVersion = ((& $existing.Path --version) -split '\s+')[1] } catch { Write-Verbose "existing ohmygpu.exe did not report a version: $_" }
 }
 
 if (-not $InstallDir) {
@@ -103,7 +104,7 @@ if (-not $InstallDir) {
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 
 if (-not $Force -and $Tag -and $existingVersion -and ("v$existingVersion" -eq $Tag) -and ($existingDir -eq $InstallDir)) {
-    Write-Info "OhMyGPU Runtime $Tag is already installed in $InstallDir — nothing to do (OHMYGPU_FORCE=1 / -Force reinstalls)."
+    Write-Info "OhMyGPU Runtime $Tag is already installed in $InstallDir - nothing to do (OHMYGPU_FORCE=1 / -Force reinstalls)."
     return
 }
 
@@ -120,7 +121,7 @@ try {
     try {
         Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Asset" -OutFile $zip
     } catch {
-        throw "download failed: $Base/$Asset ($($_.Exception.Message)) — no such release, or no Windows build in it? See $Releases"
+        throw "download failed: $Base/$Asset ($($_.Exception.Message)) - no such release, or no Windows build in it? See $Releases"
     }
     $sumsFile = Join-Path $Tmp 'SHA256SUMS.txt'
     try {
@@ -135,7 +136,7 @@ try {
     }
     if (-not $expected) { throw "no checksum for $Asset in SHA256SUMS.txt" }
     $actual = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
-    if ($actual -ne $expected) { throw "checksum mismatch for $Asset (expected $expected, got $actual) — refusing to install" }
+    if ($actual -ne $expected) { throw "checksum mismatch for $Asset (expected $expected, got $actual) - refusing to install" }
 
     $extract = Join-Path $Tmp 'extracted'
     Expand-Archive -Path $zip -DestinationPath $extract -Force
@@ -162,7 +163,7 @@ try {
 }
 
 $newVersion = $null
-try { $newVersion = ((& (Join-Path $InstallDir 'ohmygpu.exe') --version) -split '\s+')[1] } catch { }
+try { $newVersion = ((& (Join-Path $InstallDir 'ohmygpu.exe') --version) -split '\s+')[1] } catch { Write-Verbose "new ohmygpu.exe did not run: $_" }
 if (-not $newVersion) { throw "$InstallDir\ohmygpu.exe was installed but does not run" }
 
 # ---------------------------------------------------------------------------
@@ -201,7 +202,7 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint M
             }
             $result = [UIntPtr]::Zero
             [void][OhMyGPU.Native]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result)
-        } catch { }
+        } catch { Write-Verbose "could not broadcast the PATH change: $_" }
     }
     if (-not (Test-OnPath $env:Path $InstallDir)) { $env:Path = "$InstallDir;$env:Path" }
 }
@@ -217,7 +218,7 @@ if ($existingVersion -and ($existingDir -eq $InstallDir)) {
     Write-Info "Installed OhMyGPU Runtime v$newVersion to $InstallDir (ohmygpu-runtime.exe, ohmygpu.exe, omg.exe)"
 }
 if ($pathChanged) {
-    Write-Info "Added $InstallDir to your user PATH — open a new terminal for it to take effect."
+    Write-Info "Added $InstallDir to your user PATH - open a new terminal for it to take effect."
 } elseif ($NoModifyPath -and -not (Test-OnPath $env:Path $InstallDir)) {
     Write-Info "$InstallDir is not on your PATH (not modified because of -NoModifyPath / OHMYGPU_NO_MODIFY_PATH)."
 }
@@ -230,7 +231,7 @@ try {
         Write-Info ''
         Write-Info "A runtime (v$($health.version)) is running on port $port; restart it to use v${newVersion}:  omg shutdown; omg serve"
     }
-} catch { }
+} catch { Write-Verbose "no runtime answering on port ${port}: $_" }
 
 Write-Info ''
 Write-Info 'Next:'

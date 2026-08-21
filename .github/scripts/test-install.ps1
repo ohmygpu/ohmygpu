@@ -1,5 +1,5 @@
 # CI test for install.ps1 (see .github/workflows/installers.yml): a real install into a
-# temp dir against the published releases — piped like `irm | iex`, then pin an older
+# temp dir against the published releases - piped like `irm | iex`, then pin an older
 # release, upgrade in place through the PATH lookup, and finally "nothing to do".
 # Run with Windows PowerShell 5.1 and PowerShell 7:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\test-install.ps1
@@ -32,7 +32,7 @@ if ((Version-Of (Join-Path $dir 'ohmygpu.exe')) -eq '0.4.0') { throw "upgrade in
 if ((Version-Of (Join-Path $dir 'ohmygpu-runtime.exe')) -eq '0.4.0') { throw "runtime was not upgraded" }
 
 Step "same version again: nothing to do"
-$out = .\install.ps1 -NoModifyPath | Out-String
+$out = .\install.ps1 -NoModifyPath 6>&1 | Out-String
 Write-Host $out
 if ($out -notmatch 'nothing to do') { throw "expected 'nothing to do', got: $out" }
 

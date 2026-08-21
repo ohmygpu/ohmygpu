@@ -276,8 +276,9 @@ main() {
 
     tar xzf "$TMP/$asset" -C "$TMP"
     src="$TMP/ohmygpu-${TARGET}"
-    [ -f "$src/ohmygpu" ] && [ -f "$src/ohmygpu-runtime" ] \
-        || die "unexpected archive layout in $asset (expected $src/ohmygpu and $src/ohmygpu-runtime)"
+    if [ ! -f "$src/ohmygpu" ] || [ ! -f "$src/ohmygpu-runtime" ]; then
+        die "unexpected archive layout in $asset (expected $src/ohmygpu and $src/ohmygpu-runtime)"
+    fi
 
     # Install. `install` replaces the files (unlink + create), so a running runtime is unaffected.
     $SUDO mkdir -p "$INSTALL_DIR"
