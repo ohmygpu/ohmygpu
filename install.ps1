@@ -10,7 +10,7 @@
     upgrades an existing install in place. Once installed, `omg upgrade` does the
     same from the CLI.
 
-        irm https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.ps1 | iex
+        irm https://script.ohmygpu.com/install.ps1 | iex
 
     Options - environment variables for the one-liner, parameters when running the file:
 

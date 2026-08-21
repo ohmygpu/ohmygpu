@@ -43,7 +43,7 @@ Requires: macOS (Apple Silicon or Intel), Linux x86_64/arm64, or Windows x86_64.
 macOS / Linux — one line (into `/usr/local/bin`, sudo only if that needs it):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.sh | sh
+curl -fsSL https://script.ohmygpu.com/install.sh | sh
 ```
 
 Homebrew (macOS / Linux):
@@ -55,10 +55,12 @@ brew install ohmygpu/tap/ohmygpu
 Windows x64 — PowerShell (into `%LOCALAPPDATA%\Programs\ohmygpu`, added to your user `PATH`):
 
 ```powershell
-irm https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.ps1 | iex
+irm https://script.ohmygpu.com/install.ps1 | iex
 ```
 
 Script options: `--dir ~/.local/bin` / `OHMYGPU_INSTALL_DIR` picks the directory, `--version v0.5.0` / `OHMYGPU_VERSION` pins a release, `--no-sudo` never escalates (pass flags as `sh -s -- --dir ~/.local/bin`; on Windows use the environment variables, or `-InstallDir` / `-Version` / `-NoModifyPath` when running the downloaded file). **Upgrading:** `omg upgrade` for script installs (`--check` only looks, `omg upgrade v0.5.0` pins), `brew upgrade ohmygpu` for Homebrew.
+
+`script.ohmygpu.com` only redirects to [`install.sh`](install.sh) / [`install.ps1`](install.ps1) in this repository — read them first if you like.
 
 **Manual install.** Each release ships one archive per platform with the two binaries — put them anywhere, ideally on your `PATH`:
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 # OhMyGPU Runtime installer — https://github.com/ohmygpu/ohmygpu
 #
-#   curl -fsSL https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.sh | sh
+#   curl -fsSL https://script.ohmygpu.com/install.sh | sh
 #
 # Installs the latest GitHub release of `ohmygpu-runtime` (the runtime) and
 # `ohmygpu` (the CLI, plus an `omg` symlink) on macOS and Linux, verifies the
@@ -15,7 +15,7 @@
 #   --force                                reinstall even if that version is already installed
 #   -h, --help
 #
-#   curl -fsSL https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.sh | sh -s -- --version v0.5.0
+#   curl -fsSL https://script.ohmygpu.com/install.sh | sh -s -- --version v0.5.0
 #
 # Install directory: --dir / OHMYGPU_INSTALL_DIR; else the directory of the
 # `ohmygpu` already on PATH (upgrade in place); else /usr/local/bin (with sudo
@@ -37,8 +37,8 @@ usage() {
     cat <<'EOF'
 OhMyGPU Runtime installer
 
-  curl -fsSL https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.sh | sh
-  curl -fsSL https://raw.githubusercontent.com/ohmygpu/ohmygpu/main/install.sh | sh -s -- [options]
+  curl -fsSL https://script.ohmygpu.com/install.sh | sh
+  curl -fsSL https://script.ohmygpu.com/install.sh | sh -s -- [options]
 
 Options (flag or environment variable):
   --version <tag>   OHMYGPU_VERSION      release to install, e.g. v0.5.0 (default: latest)
