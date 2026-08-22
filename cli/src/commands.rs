@@ -172,8 +172,9 @@ pub async fn model_list(client: &Client, paths: &Paths, json: bool) -> Result<()
         reg.list()
             .into_iter()
             .map(|m| {
-                json!({ "id": m.id, "display_name": m.display_name, "state": "(offline)",
-                        "size_bytes": m.size_bytes, "capabilities": m.capabilities, "installed": true })
+                json!({ "id": m.id, "display_name": m.display_name, "kind": m.kind, "state": "(offline)",
+                        "size_bytes": m.size_bytes, "capabilities": m.capabilities,
+                        "context_length": m.context_length, "installed": true })
             })
             .collect()
     };
@@ -187,12 +188,12 @@ pub async fn model_list(client: &Client, paths: &Paths, json: bool) -> Result<()
         return Ok(());
     }
     println!(
-        "{:<28} {:<8} {:<12} {:>9}  {:<6} {:<7} NAME",
-        "ID", "KIND", "STATE", "SIZE", "TOOLS", "VISION"
+        "{:<28} {:<8} {:<12} {:>9}  {:<6} {:<7} {:>7}  NAME",
+        "ID", "KIND", "STATE", "SIZE", "TOOLS", "VISION", "CONTEXT"
     );
     for m in &models {
         println!(
-            "{:<28} {:<8} {:<12} {:>9}  {:<6} {:<7} {}",
+            "{:<28} {:<8} {:<12} {:>9}  {:<6} {:<7} {:>7}  {}",
             m["id"].as_str().unwrap_or("?"),
             m["kind"].as_str().unwrap_or("llm"),
             m["state"].as_str().unwrap_or("?"),
@@ -202,6 +203,10 @@ pub async fn model_list(client: &Client, paths: &Paths, json: bool) -> Result<()
                 .unwrap_or_else(|| "?".into()),
             yes_no(m["capabilities"]["tools"].as_bool().unwrap_or(false)),
             yes_no(m["capabilities"]["vision"].as_bool().unwrap_or(false)),
+            m["context_length"]
+                .as_u64()
+                .map(human_context)
+                .unwrap_or_else(|| "-".into()),
             m["display_name"].as_str().unwrap_or(""),
         );
     }
@@ -213,6 +218,16 @@ fn yes_no(b: bool) -> &'static str {
         "yes"
     } else {
         "no"
+    }
+}
+
+/// Native context window for a table cell: `32768` → `32k`, `131072` → `128k`;
+/// odd sizes stay exact.
+fn human_context(tokens: u64) -> String {
+    if tokens > 0 && tokens.is_multiple_of(1024) {
+        format!("{}k", tokens / 1024)
+    } else {
+        tokens.to_string()
     }
 }
 
