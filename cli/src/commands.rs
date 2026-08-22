@@ -187,29 +187,44 @@ pub async fn model_list(client: &Client, paths: &Paths, json: bool) -> Result<()
         println!("See supported models with: omg model catalog");
         return Ok(());
     }
+    let rows: Vec<Vec<String>> = models
+        .iter()
+        .map(|m| {
+            vec![
+                m["id"].as_str().unwrap_or("?").to_string(),
+                m["kind"].as_str().unwrap_or("llm").to_string(),
+                m["state"].as_str().unwrap_or("?").to_string(),
+                m["size_bytes"]
+                    .as_u64()
+                    .map(human_bytes)
+                    .unwrap_or_else(|| "?".into()),
+                yes_no(m["capabilities"]["tools"].as_bool().unwrap_or(false)).to_string(),
+                yes_no(m["capabilities"]["vision"].as_bool().unwrap_or(false)).to_string(),
+                m["context_length"]
+                    .as_u64()
+                    .map(human_context)
+                    .unwrap_or_else(|| "-".into()),
+                m["display_name"].as_str().unwrap_or("").to_string(),
+            ]
+        })
+        .collect();
     println!(
-        "{:<28} {:<8} {:<12} {:>9}  {:<6} {:<7} {:>7}  NAME",
-        "ID", "KIND", "STATE", "SIZE", "TOOLS", "VISION", "CONTEXT"
+        "{}",
+        render_table(
+            &["ID", "KIND", "STATE", "SIZE", "TOOLS", "VISION", "CONTEXT", "NAME"],
+            &[
+                Align::Left,
+                Align::Left,
+                Align::Left,
+                Align::Right,
+                Align::Left,
+                Align::Left,
+                Align::Right,
+                Align::Left,
+            ],
+            &rows,
+        )
     );
-    for m in &models {
-        println!(
-            "{:<28} {:<8} {:<12} {:>9}  {:<6} {:<7} {:>7}  {}",
-            m["id"].as_str().unwrap_or("?"),
-            m["kind"].as_str().unwrap_or("llm"),
-            m["state"].as_str().unwrap_or("?"),
-            m["size_bytes"]
-                .as_u64()
-                .map(human_bytes)
-                .unwrap_or_else(|| "?".into()),
-            yes_no(m["capabilities"]["tools"].as_bool().unwrap_or(false)),
-            yes_no(m["capabilities"]["vision"].as_bool().unwrap_or(false)),
-            m["context_length"]
-                .as_u64()
-                .map(human_context)
-                .unwrap_or_else(|| "-".into()),
-            m["display_name"].as_str().unwrap_or(""),
-        );
-    }
     Ok(())
 }
 
@@ -219,6 +234,53 @@ fn yes_no(b: bool) -> &'static str {
     } else {
         "no"
     }
+}
+
+#[derive(Clone, Copy)]
+enum Align {
+    Left,
+    Right,
+}
+
+/// Render rows as an ASCII table (`+---+` borders), column widths from the
+/// content. Headers follow their column's alignment. No trailing newline.
+fn render_table(headers: &[&str], align: &[Align], rows: &[Vec<String>]) -> String {
+    let n = headers.len();
+    let width = |s: &str| s.chars().count();
+    let mut widths: Vec<usize> = headers.iter().map(|h| width(h)).collect();
+    for row in rows {
+        for (i, cell) in row.iter().enumerate().take(n) {
+            widths[i] = widths[i].max(width(cell));
+        }
+    }
+    let rule = format!(
+        "+{}+",
+        widths
+            .iter()
+            .map(|w| "-".repeat(w + 2))
+            .collect::<Vec<_>>()
+            .join("+")
+    );
+    let line = |cells: &[&str]| -> String {
+        let parts: Vec<String> = (0..n)
+            .map(|i| {
+                let cell = cells.get(i).copied().unwrap_or("");
+                let pad = " ".repeat(widths[i] - width(cell));
+                match align.get(i).copied().unwrap_or(Align::Left) {
+                    Align::Left => format!(" {cell}{pad} "),
+                    Align::Right => format!(" {pad}{cell} "),
+                }
+            })
+            .collect();
+        format!("|{}|", parts.join("|"))
+    };
+    let mut out = vec![rule.clone(), line(headers), rule.clone()];
+    for row in rows {
+        let cells: Vec<&str> = row.iter().map(String::as_str).collect();
+        out.push(line(&cells));
+    }
+    out.push(rule);
+    out.join("\n")
 }
 
 /// Native context window for a table cell: `32768` → `32k`, `131072` → `128k`;
@@ -252,25 +314,39 @@ pub async fn model_catalog(client: &Client, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&models)?);
         return Ok(());
     }
+    let rows: Vec<Vec<String>> = models
+        .iter()
+        .map(|m| {
+            let size = m["size_bytes_approx"]
+                .as_u64()
+                .map(|s| s + m["mmproj_size_bytes_approx"].as_u64().unwrap_or(0));
+            vec![
+                m["id"].as_str().unwrap_or("?").to_string(),
+                m["kind"].as_str().unwrap_or("llm").to_string(),
+                size.map(human_bytes).unwrap_or_else(|| "?".into()),
+                yes_no(m["tools"].as_bool().unwrap_or(false)).to_string(),
+                yes_no(m["mmproj_file"].is_string()).to_string(),
+                m["state"].as_str().unwrap_or("?").to_string(),
+                m["display_name"].as_str().unwrap_or("").to_string(),
+            ]
+        })
+        .collect();
     println!(
-        "{:<28} {:<8} {:>9}  {:<6} {:<7} {:<14} NAME",
-        "ID", "KIND", "SIZE", "TOOLS", "VISION", "STATE"
+        "{}",
+        render_table(
+            &["ID", "KIND", "SIZE", "TOOLS", "VISION", "STATE", "NAME"],
+            &[
+                Align::Left,
+                Align::Left,
+                Align::Right,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+            ],
+            &rows,
+        )
     );
-    for m in &models {
-        let size = m["size_bytes_approx"]
-            .as_u64()
-            .map(|s| s + m["mmproj_size_bytes_approx"].as_u64().unwrap_or(0));
-        println!(
-            "{:<28} {:<8} {:>9}  {:<6} {:<7} {:<14} {}",
-            m["id"].as_str().unwrap_or("?"),
-            m["kind"].as_str().unwrap_or("llm"),
-            size.map(human_bytes).unwrap_or_else(|| "?".into()),
-            yes_no(m["tools"].as_bool().unwrap_or(false)),
-            yes_no(m["mmproj_file"].is_string()),
-            m["state"].as_str().unwrap_or("?"),
-            m["display_name"].as_str().unwrap_or(""),
-        );
-    }
     println!();
     println!("Pull with: omg model pull <ID>   (advanced: hf:owner/repo/file.gguf, hf:owner/repo/ggml-x.bin, or a direct URL)");
     Ok(())
@@ -516,5 +592,52 @@ fn human_bytes(b: u64) -> String {
         format!("{:.0} KB", b / KB)
     } else {
         format!("{b} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_table_aligns_and_sizes_columns_from_content() {
+        let rows = vec![
+            vec![
+                "qwen2.5-0.5b-instruct".into(),
+                "468.6 MB".into(),
+                "32k".into(),
+            ],
+            vec!["x".into(), "1 B".into(), "-".into()],
+        ];
+        let t = render_table(
+            &["ID", "SIZE", "CONTEXT"],
+            &[Align::Left, Align::Right, Align::Right],
+            &rows,
+        );
+        let expected = "\
++-----------------------+----------+---------+
+| ID                    |     SIZE | CONTEXT |
++-----------------------+----------+---------+
+| qwen2.5-0.5b-instruct | 468.6 MB |     32k |
+| x                     |      1 B |       - |
++-----------------------+----------+---------+";
+        assert_eq!(t, expected);
+    }
+
+    #[test]
+    fn render_table_counts_chars_not_bytes() {
+        // 4 chars (12 bytes) → a 4-wide column. (Terminal double-width of CJK
+        // is not compensated; catalog names are ASCII.)
+        let t = render_table(&["NAME"], &[Align::Left], &[vec!["通义千问".into()]]);
+        assert_eq!(t.lines().next().unwrap(), "+------+");
+        assert_eq!(t.lines().nth(3).unwrap(), "| 通义千问 |");
+    }
+
+    #[test]
+    fn human_context_is_compact_for_power_of_two_sizes() {
+        assert_eq!(human_context(32768), "32k");
+        assert_eq!(human_context(131072), "128k");
+        assert_eq!(human_context(40960), "40k");
+        assert_eq!(human_context(5000), "5000");
     }
 }
