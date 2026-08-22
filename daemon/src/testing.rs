@@ -146,6 +146,7 @@ impl ModelInstance for MockInstance {
             pid: Some(4242),
             port: Some(1),
             backend_version: Some("mock".into()),
+            context_length: self.spec_context,
         }
     }
 

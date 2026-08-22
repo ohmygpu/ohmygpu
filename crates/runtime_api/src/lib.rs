@@ -84,6 +84,11 @@ pub struct InstanceInfo {
     pub port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_version: Option<String>,
+    /// Context window (tokens) this instance serves requests with, when the
+    /// backend knows it — the `--ctx-size` it was started with, not the
+    /// model's native maximum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u32>,
 }
 
 /// Errors from backend lifecycle operations (not inference — see `InferenceError`).

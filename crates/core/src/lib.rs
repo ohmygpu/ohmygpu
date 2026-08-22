@@ -6,6 +6,7 @@
 //! * [`catalog`]   — the curated set of supported models + model reference parsing
 //! * [`registry`]  — installed models (`registry.json`)
 //! * [`download`]  — resumable HTTP downloads (Hugging Face)
+//! * [`gguf`]      — GGUF header reader (architecture, native context length) for installed models
 //! * [`recipe`]    — per-model recipes (schema v1): YAML/JSON loader, validation, JSON Schema
 //! * [`lifecycle`] — the explicit model state machine shared with clients
 //!
@@ -14,6 +15,7 @@
 pub mod catalog;
 pub mod config;
 pub mod download;
+pub mod gguf;
 pub mod hardware;
 pub mod lifecycle;
 pub mod paths;
@@ -26,7 +28,9 @@ pub use hardware::HardwareInfo;
 pub use lifecycle::{DownloadProgress, ModelState};
 pub use paths::Paths;
 pub use recipe::{Recipe, RecipeError, ResolvedVariant};
-pub use registry::{InstalledModel, ModelCapabilities, ModelRegistry, ModelSource};
+pub use registry::{
+    InstalledModel, Modalities, Modality, ModelCapabilities, ModelRegistry, ModelSource,
+};
 
 /// Crate/product version, reported by the daemon and CLI.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

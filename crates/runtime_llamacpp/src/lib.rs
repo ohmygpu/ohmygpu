@@ -227,6 +227,7 @@ impl RuntimeBackend for LlamaCppBackend {
             proc,
             http: self.http.clone(),
             backend_version: located.version.clone(),
+            context_length: spec.context_length,
             stopping: AtomicBool::new(false),
         }))
     }
@@ -237,6 +238,8 @@ pub struct LlamaCppInstance {
     proc: ServerProcess,
     http: reqwest::Client,
     backend_version: Option<String>,
+    /// `--ctx-size` the server was started with (`None` = llama-server default).
+    context_length: Option<u32>,
     stopping: AtomicBool,
 }
 
@@ -258,6 +261,7 @@ impl ModelInstance for LlamaCppInstance {
             pid: self.proc.pid,
             port: Some(self.proc.port),
             backend_version: self.backend_version.clone(),
+            context_length: self.context_length,
         }
     }
 

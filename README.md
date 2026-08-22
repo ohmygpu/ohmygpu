@@ -138,6 +138,7 @@ Verified against the official `openai` Python SDK (models list, Responses create
 ## The workflow from an application
 
 ```text
+GET  /v1/models                       → installed models with kind, capabilities, modalities, context_length — pick one
 GET  /ohmygpu/v1/models/{id}          → state: not_installed | downloading | installed | starting | running | stopping | stopped | error
 POST /ohmygpu/v1/models/pull          {"model": "qwen2.5-0.5b-instruct"}       → 202, poll state/download progress
 POST /ohmygpu/v1/models/{id}/start?wait=true                                   → 200 running (or 502 with the reason)
@@ -192,7 +193,25 @@ Not supported (400): `n > 1`, audio content parts, non-text `response_format`. I
 
 Not supported (400): `stream`, word timestamps, `/v1/audio/translations`. A chat/responses request to a whisper model, or a transcription request to an LLM, answers `400 unsupported`.
 
-**`GET /v1/models`**, **`GET /v1/models/{id}`** — installed models, OpenAI list shape (`created` = install time, extra `state` and `kind` fields).
+**`GET /v1/models`**, **`GET /v1/models/{id}`** — installed models in the OpenAI list shape (`created` = install time), plus what an application needs to *choose* one. The runtime never picks a model for a request — `model` is always explicit — so the choice is informed here:
+
+```json
+{"id": "qwen2.5-0.5b-instruct", "object": "model", "created": 1787244988, "owned_by": "ohmygpu",
+ "state": "running", "kind": "llm",
+ "capabilities": {"tools": true, "vision": false},
+ "modalities": {"input": ["text"], "output": ["text"]},
+ "context_length": 32768}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `state` | lifecycle state (`installed`, `running`, …) — no second call needed to know whether it is up |
+| `kind` | `llm` (chat/responses) or `whisper` (transcriptions) |
+| `capabilities` | `tools` — native tool calling; `vision` — image input (a projector is installed) |
+| `modalities` | what goes in / comes out, derived from kind + capabilities: `{"input": ["text", "image"], "output": ["text"]}` for vision models, `{"input": ["audio"], "output": ["text"]}` for whisper |
+| `context_length` | the model's native context window (tokens), read from the GGUF metadata at install; absent when unknown |
+
+The window a *running* model actually serves (`backend.llamacpp.context_length`, default 8192, or the `context_length` start option) is `runtime.context_length` in `GET /ohmygpu/v1/models/{id}` — it is usually smaller than the native one.
 
 **`POST /v1/completions`** (legacy) is intentionally not implemented.
 
@@ -222,7 +241,7 @@ By default a request for a stopped model is a `409`; set `inference.auto_start =
 | `GET  /ohmygpu/v1/backend`, `POST /ohmygpu/v1/backend/install[?backend=whisper]` | backend availability (`backends`: llama.cpp, whisper.cpp); install one now instead of on first start |
 | `GET  /ohmygpu/v1/catalog` | curated supported models with `installed`/`state` |
 | `GET  /ohmygpu/v1/models[?installed=true]` | all known models with lifecycle state |
-| `GET  /ohmygpu/v1/models/{id}` | one model: `state`, `download` progress, `message` (while starting), `error`, `runtime` (backend, pid, port) |
+| `GET  /ohmygpu/v1/models/{id}` | one model: `state`, `kind`, `capabilities`, `modalities`, `context_length` (native), `download` progress, `message` (while starting), `error`, `runtime` (backend, pid, port, `context_length` actually served) |
 | `POST /ohmygpu/v1/models/pull` `{"model": "<catalog id \| hf:owner/repo/file.gguf \| hf:owner/repo/ggml-x.bin \| https://…>", "id"?: "…", "mmproj"?: "<projector .gguf>", "kind"?: "llm\|whisper"}` | 202 downloading (idempotent); `mmproj` turns a non-catalog model into a vision model (can be added to an installed model later); `kind` is inferred from the file name (`*.gguf` → llm, `ggml-*.bin` → whisper) unless given |
 | `DELETE /ohmygpu/v1/models/{id}` | stop if needed, delete files, forget |
 | `POST /ohmygpu/v1/models/{id}/start[?wait=true&timeout=600]` `{"context_length"?, "gpu_layers"?, "threads"?}` | 202 starting, or with `wait` 200 running / 502 error |

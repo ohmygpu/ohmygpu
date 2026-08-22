@@ -264,6 +264,7 @@ impl ModelInstance for WhisperInstance {
             pid: self.proc.pid,
             port: Some(self.proc.port),
             backend_version: self.backend_version.clone(),
+            context_length: None,
         }
     }
 

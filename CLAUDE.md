@@ -38,7 +38,9 @@ llama.cpp is **not** linked; the runtime downloads the official release binary p
 
 ```text
 crates/core/              ohmygpu_core        paths, config (+env), hardware detection, catalog + ModelRef parsing,
-                                              registry (registry.json), resumable downloader, lifecycle ModelState,
+                                              registry (registry.json; capabilities, modalities, native context_length),
+                                              gguf.rs (GGUF header reader: architecture + context_length, read at install /
+                                              backfilled on load), resumable downloader, lifecycle ModelState,
                                               recipe.rs (recipe schema v1: YAML/JSON loader, validation, JSON Schema)
 crates/inference/         ohmygpu_inference   InferenceRequest/Response, InputItem/OutputItem, ToolDefinition/ToolCall,
                                               GenerationOptions, StreamEvent, ResponseAccumulator, InferenceError

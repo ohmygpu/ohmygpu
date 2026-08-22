@@ -35,6 +35,44 @@ pub struct ModelCapabilities {
     pub vision: bool,
 }
 
+/// A kind of content a model can take in or give out.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum Modality {
+    Text,
+    Image,
+    Audio,
+}
+
+/// What goes into a model and what comes out — derived from its kind and
+/// capabilities, so clients can pick a model for a task without knowing
+/// OhMyGPU's model kinds.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct Modalities {
+    pub input: Vec<Modality>,
+    pub output: Vec<Modality>,
+}
+
+impl ModelCapabilities {
+    /// The modalities of a `kind` model with these capabilities.
+    pub fn modalities(&self, kind: ModelKind) -> Modalities {
+        match kind {
+            ModelKind::Llm => Modalities {
+                input: if self.vision {
+                    vec![Modality::Text, Modality::Image]
+                } else {
+                    vec![Modality::Text]
+                },
+                output: vec![Modality::Text],
+            },
+            ModelKind::Whisper => Modalities {
+                input: vec![Modality::Audio],
+                output: vec![Modality::Text],
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstalledModel {
     pub id: String,
@@ -55,6 +93,11 @@ pub struct InstalledModel {
     pub installed_at: DateTime<Utc>,
     #[serde(default)]
     pub capabilities: ModelCapabilities,
+    /// Native context window (tokens) from the model file's metadata
+    /// (`<arch>.context_length`); `None` when unknown (whisper models, or
+    /// files that do not record it). Filled at install and backfilled on load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u32>,
     /// From the curated catalog (vs. an explicit hf: reference).
     #[serde(default)]
     pub curated: bool,
@@ -119,6 +162,18 @@ impl ModelRegistry {
         self.save()
     }
 
+    /// Modify one entry in place and persist. `false` when `id` is unknown.
+    pub fn update(&mut self, id: &str, f: impl FnOnce(&mut InstalledModel)) -> Result<bool> {
+        match self.models.get_mut(id) {
+            Some(m) => {
+                f(m);
+                self.save()?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     pub fn remove(&mut self, id: &str) -> Result<Option<InstalledModel>> {
         let removed = self.models.remove(id);
         if removed.is_some() {
@@ -180,6 +235,7 @@ mod tests {
                 tools: true,
                 vision: false,
             },
+            context_length: None,
             curated: true,
         }
     }
@@ -199,6 +255,19 @@ mod tests {
         let reg2 = ModelRegistry::load(&reg_path).unwrap();
         assert_eq!(reg2.get("a").unwrap().path, file);
         assert!(reg2.get("a").unwrap().capabilities.tools);
+        assert_eq!(reg2.get("a").unwrap().context_length, None);
+
+        let mut reg2 = reg2;
+        assert!(reg2.update("a", |m| m.context_length = Some(4096)).unwrap());
+        assert!(!reg2.update("zzz", |_| {}).unwrap());
+        assert_eq!(
+            ModelRegistry::load(&reg_path)
+                .unwrap()
+                .get("a")
+                .unwrap()
+                .context_length,
+            Some(4096)
+        );
 
         let mut reg3 = ModelRegistry::load(&reg_path).unwrap();
         assert!(reg3.remove("a").unwrap().is_some());

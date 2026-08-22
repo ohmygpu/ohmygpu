@@ -22,9 +22,12 @@ use chrono::{DateTime, Utc};
 use ohmygpu_core::catalog::{self, ModelRef};
 use ohmygpu_core::config::Config;
 use ohmygpu_core::download::{DownloadError, Downloader};
+use ohmygpu_core::gguf;
 use ohmygpu_core::lifecycle::{DownloadProgress, ModelState};
 use ohmygpu_core::paths::Paths;
-use ohmygpu_core::registry::{InstalledModel, ModelCapabilities, ModelRegistry, ModelSource};
+use ohmygpu_core::registry::{
+    InstalledModel, Modalities, ModelCapabilities, ModelRegistry, ModelSource,
+};
 use ohmygpu_inference::{InferenceError, ModelKind};
 use ohmygpu_runtime_api::{
     BackendAvailability, InstanceInfo, InstanceStatus, ModelInstance, ProgressUpdate,
@@ -62,6 +65,14 @@ pub struct ModelView {
     pub installed: bool,
     pub curated: bool,
     pub capabilities: ModelCapabilities,
+    /// What the model takes in and gives out (from `kind` + `capabilities`).
+    #[serde(default)]
+    pub modalities: Modalities,
+    /// Native context window (tokens) from the model file's metadata; absent
+    /// when unknown. The window a *running* model actually serves is
+    /// `runtime.context_length`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<ModelSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -224,6 +235,7 @@ impl ModelManager {
         for id in &pruned {
             tracing::warn!("model '{id}' was in the registry but its file is missing; removed");
         }
+        Self::backfill_context_length(&mut registry);
         let mut models = BTreeMap::new();
         for m in registry.list() {
             models.insert(m.id.clone(), Record::new(ModelState::Installed));
@@ -243,6 +255,29 @@ impl ModelManager {
             inner: Mutex::new(Inner { models }),
             changed,
         }))
+    }
+
+    /// Models installed before the registry recorded `context_length` get it
+    /// from their GGUF header now (cheap: the header is a few KB). Files that
+    /// do not record one are simply re-checked next start.
+    fn backfill_context_length(registry: &mut ModelRegistry) {
+        let missing: Vec<(String, PathBuf)> = registry
+            .list()
+            .into_iter()
+            .filter(|m| m.kind == ModelKind::Llm && m.context_length.is_none())
+            .map(|m| (m.id.clone(), m.path.clone()))
+            .collect();
+        for (id, path) in missing {
+            let Some(ctx) = gguf::context_length(&path) else {
+                continue;
+            };
+            match registry.update(&id, |m| m.context_length = Some(ctx)) {
+                Ok(_) => {
+                    tracing::info!(model = %id, "recorded context_length {ctx} from GGUF metadata")
+                }
+                Err(e) => tracing::warn!(model = %id, "could not save context_length: {e}"),
+            }
+        }
     }
 
     /// The LLM backend (llama.cpp) — what most clients mean by "the backend".
@@ -309,6 +344,8 @@ impl ModelManager {
                 })
             })
             .unwrap_or_default();
+        let modalities = capabilities.modalities(kind);
+        let context_length = installed.and_then(|m| m.context_length);
         let source = installed.map(|m| m.source.clone()).or_else(|| {
             cat.map(|c| ModelSource::HuggingFace {
                 repo: c.repo.to_string(),
@@ -346,6 +383,8 @@ impl ModelManager {
             installed: installed.is_some(),
             curated,
             capabilities,
+            modalities,
+            context_length,
             source,
             format: installed.map(|m| m.format.clone()),
             size_bytes: installed.map(|m| m.size_bytes),
@@ -595,6 +634,15 @@ impl ModelManager {
         }
 
         let size: u64 = sizes.iter().sum();
+        let context_length = match mref.kind {
+            ModelKind::Llm => {
+                let path = plan[0].dest.clone();
+                tokio::task::spawn_blocking(move || gguf::context_length(&path))
+                    .await
+                    .unwrap_or(None)
+            }
+            ModelKind::Whisper => None,
+        };
         let installed = InstalledModel {
             id: id.clone(),
             display_name: mref.display_name.clone(),
@@ -609,6 +657,7 @@ impl ModelManager {
                 tools: mref.tools,
                 vision: mref.mmproj.is_some(),
             },
+            context_length,
             curated: mref.curated,
         };
         let mut inner = self.inner.lock().unwrap();

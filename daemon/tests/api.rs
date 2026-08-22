@@ -55,6 +55,57 @@ fn install_fake_model(paths: &Paths, id: &str) {
             tools: true,
             vision: false,
         },
+        context_length: None,
+        curated: false,
+    })
+    .unwrap();
+}
+
+/// A minimal GGUF v3 header (no tensors) declaring `general.architecture =
+/// llama` and `llama.context_length = ctx` — enough for the runtime to read the
+/// native context window.
+fn tiny_gguf(ctx: u32) -> Vec<u8> {
+    fn put_str(out: &mut Vec<u8>, s: &str) {
+        out.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        out.extend_from_slice(s.as_bytes());
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(b"GGUF");
+    out.extend_from_slice(&3u32.to_le_bytes()); // version
+    out.extend_from_slice(&0u64.to_le_bytes()); // tensors
+    out.extend_from_slice(&2u64.to_le_bytes()); // kv pairs
+    put_str(&mut out, "general.architecture");
+    out.extend_from_slice(&8u32.to_le_bytes()); // string
+    put_str(&mut out, "llama");
+    put_str(&mut out, "llama.context_length");
+    out.extend_from_slice(&4u32.to_le_bytes()); // u32
+    out.extend_from_slice(&ctx.to_le_bytes());
+    out
+}
+
+/// A fake model whose file is a real GGUF header with `context_length = ctx`,
+/// registered *without* `context_length` (as older installs are) — the
+/// manager backfills it from the file on load.
+fn install_fake_model_with_gguf_header(paths: &Paths, id: &str, ctx: u32) {
+    let dir = paths.model_dir(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(format!("{id}.gguf"));
+    std::fs::write(&file, tiny_gguf(ctx)).unwrap();
+    let mut reg = ModelRegistry::load(paths.registry_path()).unwrap();
+    reg.add(InstalledModel {
+        id: id.into(),
+        display_name: "Mock Model With Header".into(),
+        source: ModelSource::Url {
+            url: format!("https://example.invalid/{id}.gguf"),
+        },
+        format: "gguf".into(),
+        path: file,
+        mmproj_path: None,
+        kind: Default::default(),
+        size_bytes: 100,
+        installed_at: chrono::Utc::now(),
+        capabilities: ModelCapabilities::default(),
+        context_length: None,
         curated: false,
     })
     .unwrap();
@@ -86,6 +137,7 @@ fn install_fake_vision_model(paths: &Paths, id: &str) {
             tools: false,
             vision: true,
         },
+        context_length: None,
         curated: false,
     })
     .unwrap();
@@ -262,6 +314,53 @@ async fn status_and_catalog() {
 // Models listing
 // ---------------------------------------------------------------------------
 
+/// `/v1/models` tells an application what it needs to *choose* a model: kind,
+/// capabilities, modalities and the native context window — for every kind.
+#[tokio::test]
+async fn v1_models_describe_capabilities_modalities_and_context_length() {
+    let t = setup_full(Config::default(), |p| {
+        install_fake_vision_model(p, "eyes");
+        install_fake_whisper_model(p, "ears");
+        install_fake_model_with_gguf_header(p, "ctx", 8192);
+    })
+    .await;
+    let (_, v) = t.json("GET", "/v1/models", None).await;
+    let by_id = |id: &str| {
+        v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} listed in {v}"))
+    };
+
+    let eyes = by_id("eyes");
+    assert_eq!(eyes["kind"], "llm");
+    assert_eq!(eyes["capabilities"]["vision"], true);
+    assert_eq!(eyes["modalities"]["input"], json!(["text", "image"]));
+    assert_eq!(eyes["modalities"]["output"], json!(["text"]));
+
+    let ears = by_id("ears");
+    assert_eq!(ears["kind"], "whisper");
+    assert_eq!(ears["modalities"]["input"], json!(["audio"]));
+    assert_eq!(ears["modalities"]["output"], json!(["text"]));
+    assert!(ears.get("context_length").is_none());
+
+    // Installed before context_length existed → backfilled from the GGUF on load …
+    let ctx = by_id("ctx");
+    assert_eq!(ctx["context_length"], 8192, "{ctx}");
+    // … and persisted, so the next daemon start does not re-read the file.
+    let reg = ModelRegistry::load(t.state.paths.registry_path()).unwrap();
+    assert_eq!(reg.get("ctx").unwrap().context_length, Some(8192));
+    // The Management API shows the same model facts.
+    let (_, m) = t.json("GET", "/ohmygpu/v1/models/ctx", None).await;
+    assert_eq!(m["context_length"], 8192);
+    assert_eq!(m["modalities"]["input"], json!(["text"]));
+    // Not running → no served window yet.
+    assert!(m.get("runtime").is_none());
+}
+
 #[tokio::test]
 async fn v1_models_lists_only_installed_models() {
     let t = setup().await;
@@ -273,10 +372,21 @@ async fn v1_models_lists_only_installed_models() {
     assert_eq!(data[0]["id"], MODEL);
     assert_eq!(data[0]["object"], "model");
     assert_eq!(data[0]["state"], "installed");
+    assert_eq!(data[0]["kind"], "llm");
+    assert_eq!(data[0]["capabilities"]["tools"], true);
+    assert_eq!(data[0]["capabilities"]["vision"], false);
+    assert_eq!(data[0]["modalities"]["input"], json!(["text"]));
+    assert_eq!(data[0]["modalities"]["output"], json!(["text"]));
+    assert!(
+        data[0].get("context_length").is_none(),
+        "unknown context length is absent, not null/0: {}",
+        data[0]
+    );
 
     let (s, v) = t.json("GET", &format!("/v1/models/{MODEL}"), None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["id"], MODEL);
+    assert_eq!(v["capabilities"]["tools"], true);
 
     let (s, v) = t.json("GET", "/v1/models/nope", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -429,6 +539,13 @@ async fn lifecycle_start_stop_crash_restart_delete() {
         Some(1234),
         "start options reach the backend"
     );
+    let (_, v) = t
+        .json("GET", &format!("/ohmygpu/v1/models/{MODEL}"), None)
+        .await;
+    assert_eq!(
+        v["runtime"]["context_length"], 1234,
+        "the window a running model serves is reported under runtime: {v}"
+    );
     t.backend.set_start_delay(Duration::ZERO);
 
     // crash → error, with message; error state is startable
@@ -529,8 +646,9 @@ async fn invalid_lifecycle_requests() {
 #[tokio::test]
 async fn pull_downloads_registers_and_can_run() {
     let t = setup().await;
-    // Serve a fake gguf.
-    let payload = vec![7u8; 300_000];
+    // Serve a fake gguf: a real header (context_length 4096) padded to 300 kB.
+    let mut payload = tiny_gguf(4096);
+    payload.resize(300_000, 7u8);
     let file_app = Router::new().route(
         "/models/tiny.gguf",
         axum::routing::get({
@@ -567,6 +685,10 @@ async fn pull_downloads_registers_and_can_run() {
     assert_eq!(v["state"], "installed");
     assert_eq!(v["size_bytes"], 300_000);
     assert_eq!(v["source"]["type"], "url");
+    assert_eq!(
+        v["context_length"], 4096,
+        "native context length is read from the GGUF at install: {v}"
+    );
     assert!(t.state.paths.model_dir("tiny").join("tiny.gguf").exists());
     // pulling again is a no-op 200
     let (s, v) = t
@@ -578,13 +700,15 @@ async fn pull_downloads_registers_and_can_run() {
         .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["model"]["state"], "installed");
-    // and it shows up for OpenAI clients
+    // and it shows up for OpenAI clients, context length included
     let (_, v) = t.json("GET", "/v1/models", None).await;
-    assert!(v["data"]
+    let tiny = v["data"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|m| m["id"] == "tiny"));
+        .find(|m| m["id"] == "tiny")
+        .expect("tiny listed");
+    assert_eq!(tiny["context_length"], 4096);
     // survives a registry reload
     let reg = ModelRegistry::load(t.state.paths.registry_path()).unwrap();
     assert!(reg.contains("tiny"));
@@ -1016,6 +1140,7 @@ async fn vision_model_accepts_inline_and_remote_images() {
         .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["model"]["capabilities"]["vision"], true);
+    assert_eq!(v["model"]["modalities"]["input"], json!(["text", "image"]));
     assert!(t.backend.last_instance().unwrap().spec_mmproj.is_some());
 
     // Inline data: URL, chat completions shape.
@@ -1265,6 +1390,7 @@ fn install_fake_whisper_model(paths: &Paths, id: &str) {
         size_bytes: 15,
         installed_at: chrono::Utc::now(),
         capabilities: ModelCapabilities::default(),
+        context_length: None,
         curated: false,
     })
     .unwrap();
